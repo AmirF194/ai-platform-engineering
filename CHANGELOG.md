@@ -1,3 +1,26 @@
+## 1.1.0 (2026-09-14)
+
+## 1.1.0-dev.7 (2026-09-14)
+
+### Fix
+
+- **helm**: harden workload defaults (#2469)
+- **ui**: prevent recursive stream timeline updates (#2719)
+
+## 1.1.0-dev.5 (2026-09-14)
+
+### Feat
+
+- **runtime**: upgrade to Python 3.14 (#2722)
+
+## 1.1.0-dev.4 (2026-09-14)
+
+### Refactor
+
+- **slack-bot**: make app.py a thin composition root (#2596)
+
+## 1.1.0-dev.3 (2026-09-14)
+
 ## 1.1.0-rc.2 (2026-09-14)
 
 ### Feat
