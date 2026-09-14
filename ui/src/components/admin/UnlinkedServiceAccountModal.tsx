@@ -39,6 +39,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { ScopeRef, UnlinkedScope } from "@/lib/service-account-scopes";
+import { fetchCollectionMemberDatasourceIds } from "@/lib/rag-collections-client";
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -58,7 +59,11 @@ interface GrantableItem {
 interface GrantableData {
   agents: GrantableItem[];
   tools: GrantableItem[];
+  datasources: GrantableItem[];
+  collections: GrantableItem[];
 }
+
+type UnlinkedScopeType = "agent" | "tool" | "datasource" | "collection";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main component
@@ -84,8 +89,11 @@ export function UnlinkedServiceAccountModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingRemove, setPendingRemove] = useState<ScopeRef | null>(null);
-  const [addType, setAddType] = useState<"agent" | "tool">("agent");
+  const [addType, setAddType] = useState<UnlinkedScopeType>("agent");
   const [addRef, setAddRef] = useState("");
+  const [collectionPickNote, setCollectionPickNote] = useState<string | null>(
+    null,
+  );
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -127,14 +135,27 @@ export function UnlinkedServiceAccountModal({
       setAddRef("");
       setAddType("agent");
       setPendingRemove(null);
+      setCollectionPickNote(null);
       void refresh();
     }
   }, [open, refresh]);
 
   // Scopes available to add (caller-grantable minus already-granted).
-  const held = addType === "agent" ? (grantable?.agents ?? []) : (grantable?.tools ?? []);
+  const grantableByType: Record<UnlinkedScopeType, GrantableItem[]> = {
+    agent: grantable?.agents ?? [],
+    tool: grantable?.tools ?? [],
+    datasource: grantable?.datasources ?? [],
+    collection: grantable?.collections ?? [],
+  };
+  const held = grantableByType[addType];
   const existingRefs = new Set((sa?.scopes ?? []).map((s) => `${s.type}:${s.ref}`));
   const addableOptions = held.filter((item) => !existingRefs.has(`${addType}:${item.ref}`));
+  const addableDatasourcesForBulk = grantableByType.datasource.filter(
+    (item) => !existingRefs.has(`datasource:${item.ref}`),
+  );
+  const addableCollectionsForBulk = grantableByType.collection.filter(
+    (item) => !existingRefs.has(`collection:${item.ref}`),
+  );
 
   const addScope = useCallback(async () => {
     if (!sa || !addRef) return;
@@ -160,6 +181,55 @@ export function UnlinkedServiceAccountModal({
       setBusy(false);
     }
   }, [sa, addType, addRef, refresh]);
+
+  const addDatasourcesFromCollection = useCallback(
+    async (collectionId: string) => {
+      if (!sa) return;
+      setCollectionPickNote(null);
+      setBusy(true);
+      setError(null);
+      try {
+        const memberIds = await fetchCollectionMemberDatasourceIds(collectionId);
+        const addableRefs = new Set(
+          addableDatasourcesForBulk.map((item) => item.ref),
+        );
+        const addable = memberIds.filter((id) => addableRefs.has(id));
+        if (addable.length === 0) {
+          setCollectionPickNote(
+            "No datasources you can grant are in that collection.",
+          );
+          return;
+        }
+        for (const ref of addable) {
+          const res = await fetch(
+            `/api/admin/service-accounts/${encodeURIComponent(sa.id)}/scopes`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ type: "datasource", ref }),
+            },
+          );
+          const body = await res.json();
+          if (!res.ok || !body.success) {
+            await refresh();
+            setError(body.error || `Failed to add datasource ${ref}`);
+            return;
+          }
+        }
+        setCollectionPickNote(
+          `Added ${addable.length} datasource${addable.length === 1 ? "" : "s"} from the collection.`,
+        );
+        await refresh();
+      } catch (err) {
+        setCollectionPickNote(
+          err instanceof Error ? err.message : "Could not load collection",
+        );
+      } finally {
+        setBusy(false);
+      }
+    },
+    [sa, addableDatasourcesForBulk, refresh],
+  );
 
   const removeScope = useCallback(
     async (scope: ScopeRef) => {
@@ -332,6 +402,15 @@ export function UnlinkedServiceAccountModal({
                         are enabled.
                       </p>
                     )}
+                    {addType === "collection" && (
+                      <p className="text-xs text-muted-foreground">
+                        A collection grant lets unlinked callers search using
+                        that collection as a filter; it does not grant access
+                        to its member datasources. Add datasources directly,
+                        or use &quot;Add datasources from a collection&quot;
+                        below, for content access.
+                      </p>
+                    )}
                     <div
                       className="flex min-w-0 flex-col gap-2 sm:flex-row"
                       data-testid="unlinked-add-scope-controls"
@@ -340,13 +419,15 @@ export function UnlinkedServiceAccountModal({
                         aria-label="Scope type"
                         value={addType}
                         onChange={(e) => {
-                          setAddType(e.target.value as "agent" | "tool");
+                          setAddType(e.target.value as UnlinkedScopeType);
                           setAddRef("");
                         }}
-                        className="h-9 min-w-0 rounded-md border border-input bg-background px-2 text-sm sm:w-24"
+                        className="h-9 min-w-0 rounded-md border border-input bg-background px-2 text-sm sm:w-32"
                       >
                         <option value="agent">Agent</option>
                         <option value="tool">Tool</option>
+                        <option value="datasource">Datasource</option>
+                        <option value="collection">Collection</option>
                       </Select>
                       <SearchablePicker
                         options={addableOptions}
@@ -376,6 +457,40 @@ export function UnlinkedServiceAccountModal({
                         <Plus className="h-4 w-4" />
                         Add
                       </Button>
+                    </div>
+
+                    <div className="space-y-1 border-t border-dashed border-input pt-2">
+                      <label className="text-xs font-medium text-muted-foreground">
+                        Add datasources from a collection
+                      </label>
+                      <SearchablePicker
+                        options={addableCollectionsForBulk}
+                        selected={undefined}
+                        onSelect={(item) =>
+                          void addDatasourcesFromCollection(item.ref)
+                        }
+                        getOptionKey={(item) => item.ref}
+                        getOptionLabel={(item) => item.name}
+                        getSearchText={(item) => [item.ref, item.name]}
+                        placeholder="Select a collection to bulk-add its datasources..."
+                        searchPlaceholder="Search collections..."
+                        emptyLabel="No collections available"
+                        ariaLabel="Add datasources from a collection"
+                        disabled={busy || addableCollectionsForBulk.length === 0}
+                        triggerClassName="h-9 w-full text-sm"
+                      />
+                      {collectionPickNote && (
+                        <p className="text-xs text-muted-foreground">
+                          {collectionPickNote}
+                        </p>
+                      )}
+                      <p className="text-xs text-muted-foreground">
+                        Adds every datasource in the collection that you can
+                        grant to unlinked callers. This does not add the
+                        collection itself — add it separately above if
+                        unlinked callers should also use it as a search
+                        filter.
+                      </p>
                     </div>
                   </div>
                 )}

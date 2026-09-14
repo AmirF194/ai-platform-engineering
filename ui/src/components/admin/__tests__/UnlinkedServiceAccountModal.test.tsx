@@ -36,6 +36,16 @@ const GRANTABLE = {
     { ref: "sre-agent", name: "SRE Agent" },
   ],
   tools: [{ ref: "jira/search", name: "Jira: search" }],
+  datasources: [
+    { ref: "ds-1", name: "Datasource One" },
+    { ref: "ds-2", name: "Datasource Two" },
+  ],
+  collections: [{ ref: "coll-1", name: "Collection One" }],
+};
+
+const COLLECTION_MEMBERS = {
+  success: true,
+  data: { source_ids: ["ds-1", "ds-2", "ds-not-grantable"] },
 };
 
 function mockFetch({
@@ -43,11 +53,13 @@ function mockFetch({
   grantable = { success: true, data: GRANTABLE },
   scopePost = { success: true, data: { added: { type: "agent", ref: "sre-agent" } } },
   scopeDelete = { success: true, data: { removed: { type: "agent", ref: "hello-world" } } },
+  collectionMembers = COLLECTION_MEMBERS,
 }: {
   sa?: object;
   grantable?: object;
   scopePost?: object;
   scopeDelete?: object;
+  collectionMembers?: object;
 } = {}) {
   global.fetch = jest.fn((url: RequestInfo | URL, init?: RequestInit) => {
     const href = String(url);
@@ -63,6 +75,12 @@ function mockFetch({
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve(grantable),
+      } as Response);
+    }
+    if (href.includes("/api/rag/collections/") && method === "GET") {
+      return Promise.resolve({
+        ok: (collectionMembers as Record<string, unknown>).success !== false,
+        json: () => Promise.resolve(collectionMembers),
       } as Response);
     }
     if (href.includes("/scopes") && method === "POST") {
@@ -307,6 +325,392 @@ describe("UnlinkedServiceAccountModal", () => {
     const closeBtn = screen.getByTestId("unlinked-modal-close");
     fireEvent.click(closeBtn);
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
+// ── Datasource/Collection scopes + bulk-add-by-collection ──────────────────
+
+describe("UnlinkedServiceAccountModal — datasource/collection scopes", () => {
+  it("offers Datasource and Collection alongside Agent and Tool in the scope-type select", async () => {
+    render(
+      <UnlinkedServiceAccountModal open isAdmin onOpenChange={jest.fn()} />,
+    );
+
+    await waitFor(() => screen.getByText(/add a scope/i));
+    const typeSelect = screen.getByRole("combobox", { name: /scope type/i });
+    const optionLabels = Array.from(typeSelect.querySelectorAll("option")).map(
+      (o) => o.textContent,
+    );
+    expect(optionLabels).toEqual(["Agent", "Tool", "Datasource", "Collection"]);
+  });
+
+  it("adds a datasource scope via the Datasource type", async () => {
+    render(
+      <UnlinkedServiceAccountModal open isAdmin onOpenChange={jest.fn()} />,
+    );
+
+    await waitFor(() => screen.getByText(/add a scope/i));
+    fireEvent.change(screen.getByRole("combobox", { name: /scope type/i }), {
+      target: { value: "datasource" },
+    });
+
+    const refSelect = screen.getByRole("combobox", { name: /scope ref/i });
+    fireEvent.click(refSelect);
+    fireEvent.click(await screen.findByRole("option", { name: "Datasource One" }));
+    fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/admin/service-accounts/${encodeURIComponent(ANON_SA.id)}/scopes`,
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ type: "datasource", ref: "ds-1" }),
+        }),
+      );
+    });
+  });
+
+  it("adds a collection scope via the Collection type, and shows the search-filter-only note", async () => {
+    render(
+      <UnlinkedServiceAccountModal open isAdmin onOpenChange={jest.fn()} />,
+    );
+
+    await waitFor(() => screen.getByText(/add a scope/i));
+    fireEvent.change(screen.getByRole("combobox", { name: /scope type/i }), {
+      target: { value: "collection" },
+    });
+
+    expect(
+      screen.getByText(/does not grant access to its member datasources/i),
+    ).toBeInTheDocument();
+
+    const refSelect = screen.getByRole("combobox", { name: /scope ref/i });
+    fireEvent.click(refSelect);
+    fireEvent.click(await screen.findByRole("option", { name: "Collection One" }));
+    fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/admin/service-accounts/${encodeURIComponent(ANON_SA.id)}/scopes`,
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ type: "collection", ref: "coll-1" }),
+        }),
+      );
+    });
+  });
+
+  it("bulk-adds every grantable datasource from a selected collection via individual POSTs", async () => {
+    render(
+      <UnlinkedServiceAccountModal open isAdmin onOpenChange={jest.fn()} />,
+    );
+
+    await waitFor(() => screen.getByText(/add datasources from a collection/i));
+    fireEvent.click(
+      screen.getByRole("combobox", { name: /add datasources from a collection/i }),
+    );
+    fireEvent.click(await screen.findByRole("option", { name: "Collection One" }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/admin/service-accounts/${encodeURIComponent(ANON_SA.id)}/scopes`,
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ type: "datasource", ref: "ds-1" }),
+        }),
+      );
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/admin/service-accounts/${encodeURIComponent(ANON_SA.id)}/scopes`,
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ type: "datasource", ref: "ds-2" }),
+        }),
+      );
+      expect(
+        screen.getByText(/added 2 datasources from the collection/i),
+      ).toBeInTheDocument();
+    });
+    // The non-grantable member id must never be POSTed.
+    expect(global.fetch).not.toHaveBeenCalledWith(
+      `/api/admin/service-accounts/${encodeURIComponent(ANON_SA.id)}/scopes`,
+      expect.objectContaining({
+        body: JSON.stringify({ type: "datasource", ref: "ds-not-grantable" }),
+      }),
+    );
+  });
+
+  it("excludes datasources already granted to the unlinked SA from the bulk-by-collection add", async () => {
+    mockFetch({
+      sa: {
+        success: true,
+        data: { ...ANON_SA, scopes: [...ANON_SA.scopes, { type: "datasource", ref: "ds-1" }] },
+      },
+    });
+
+    render(
+      <UnlinkedServiceAccountModal open isAdmin onOpenChange={jest.fn()} />,
+    );
+
+    await waitFor(() => screen.getByText(/add datasources from a collection/i));
+    fireEvent.click(
+      screen.getByRole("combobox", { name: /add datasources from a collection/i }),
+    );
+    fireEvent.click(await screen.findByRole("option", { name: "Collection One" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/added 1 datasource from the collection/i),
+      ).toBeInTheDocument();
+    });
+    expect(global.fetch).not.toHaveBeenCalledWith(
+      `/api/admin/service-accounts/${encodeURIComponent(ANON_SA.id)}/scopes`,
+      expect.objectContaining({
+        body: JSON.stringify({ type: "datasource", ref: "ds-1" }),
+      }),
+    );
+  });
+
+  it("shows a note when no datasources in the collection are grantable", async () => {
+    mockFetch({
+      collectionMembers: { success: true, data: { source_ids: ["ds-not-grantable"] } },
+    });
+
+    render(
+      <UnlinkedServiceAccountModal open isAdmin onOpenChange={jest.fn()} />,
+    );
+
+    await waitFor(() => screen.getByText(/add datasources from a collection/i));
+    fireEvent.click(
+      screen.getByRole("combobox", { name: /add datasources from a collection/i }),
+    );
+    fireEvent.click(await screen.findByRole("option", { name: "Collection One" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/no datasources you can grant are in that collection/i),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("shows an error note when the collection fetch fails", async () => {
+    mockFetch({
+      collectionMembers: { success: false, error: "Collection not found" },
+    });
+
+    render(
+      <UnlinkedServiceAccountModal open isAdmin onOpenChange={jest.fn()} />,
+    );
+
+    await waitFor(() => screen.getByText(/add datasources from a collection/i));
+    fireEvent.click(
+      screen.getByRole("combobox", { name: /add datasources from a collection/i }),
+    );
+    fireEvent.click(await screen.findByRole("option", { name: "Collection One" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/collection not found/i)).toBeInTheDocument();
+    });
+  });
+
+  it("stops the bulk-by-collection loop and surfaces the error on a partial POST failure", async () => {
+    const postedRefs: string[] = [];
+    global.fetch = jest.fn((url: RequestInfo | URL, init?: RequestInit) => {
+      const href = String(url);
+      const method = init?.method?.toUpperCase() ?? "GET";
+      if (href.includes("/api/admin/service-accounts/unlinked")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: ANON_SA }),
+        } as Response);
+      }
+      if (href.includes("/api/admin/service-accounts/grantable")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: GRANTABLE }),
+        } as Response);
+      }
+      if (href.includes("/api/rag/collections/") && method === "GET") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(COLLECTION_MEMBERS),
+        } as Response);
+      }
+      if (href.includes("/scopes") && method === "POST") {
+        const body = JSON.parse(String(init?.body)) as { ref: string };
+        postedRefs.push(body.ref);
+        if (body.ref === "ds-2") {
+          return Promise.resolve({
+            ok: false,
+            json: () =>
+              Promise.resolve({
+                success: false,
+                error: "You cannot grant a scope you do not hold",
+              }),
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { added: body } }),
+        } as Response);
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${href} [${method}]`));
+    });
+
+    render(
+      <UnlinkedServiceAccountModal open isAdmin onOpenChange={jest.fn()} />,
+    );
+
+    await waitFor(() => screen.getByText(/add datasources from a collection/i));
+    fireEvent.click(
+      screen.getByRole("combobox", { name: /add datasources from a collection/i }),
+    );
+    fireEvent.click(await screen.findByRole("option", { name: "Collection One" }));
+
+    await waitFor(() => {
+      const errors = screen.getAllByTestId("unlinked-modal-error");
+      expect(errors[0]).toHaveTextContent(/cannot grant a scope you do not hold/i);
+    });
+    // ds-1 succeeded, ds-2 failed and stopped the loop — the non-grantable
+    // third member must never even be attempted.
+    expect(postedRefs).toEqual(["ds-1", "ds-2"]);
+  });
+
+  it("disables the bulk-add picker while a previous pick is still resolving, so a second click cannot double-POST", async () => {
+    let resolveCollectionFetch: ((value: unknown) => void) | undefined;
+    const pendingCollectionFetch = new Promise((resolve) => {
+      resolveCollectionFetch = resolve;
+    });
+    global.fetch = jest.fn((url: RequestInfo | URL, init?: RequestInit) => {
+      const href = String(url);
+      const method = init?.method?.toUpperCase() ?? "GET";
+      if (href.includes("/api/admin/service-accounts/unlinked")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: ANON_SA }),
+        } as Response);
+      }
+      if (href.includes("/api/admin/service-accounts/grantable")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: GRANTABLE }),
+        } as Response);
+      }
+      if (href.includes("/api/rag/collections/") && method === "GET") {
+        return pendingCollectionFetch.then(
+          () => ({ ok: true, json: () => Promise.resolve(COLLECTION_MEMBERS) } as Response),
+        );
+      }
+      if (href.includes("/scopes") && method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { added: {} } }),
+        } as Response);
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${href} [${method}]`));
+    });
+
+    render(
+      <UnlinkedServiceAccountModal open isAdmin onOpenChange={jest.fn()} />,
+    );
+
+    await waitFor(() => screen.getByText(/add datasources from a collection/i));
+    const picker = screen.getByRole("combobox", {
+      name: /add datasources from a collection/i,
+    });
+    fireEvent.click(picker);
+    fireEvent.click(await screen.findByRole("option", { name: "Collection One" }));
+
+    expect(picker).toBeDisabled();
+
+    resolveCollectionFetch?.(undefined);
+    await waitFor(() =>
+      expect(screen.getByText(/added 2 datasources from the collection/i)).toBeInTheDocument(),
+    );
+    expect(picker).not.toBeDisabled();
+  });
+
+  it("is idempotent: picking the same collection a second time after the first completes adds nothing new", async () => {
+    // A stateful mock is required here: the real regression is that the
+    // second pick's exclusion set comes from the SA's scopes as returned by
+    // `refresh()` after the first pick applied — a static fixture would mask
+    // that and pass even if the exclusion filter were broken.
+    let scopes = [...ANON_SA.scopes];
+    const postedRefs: string[] = [];
+    global.fetch = jest.fn((url: RequestInfo | URL, init?: RequestInit) => {
+      const href = String(url);
+      const method = init?.method?.toUpperCase() ?? "GET";
+      if (href.includes("/api/admin/service-accounts/unlinked")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { ...ANON_SA, scopes } }),
+        } as Response);
+      }
+      if (href.includes("/api/admin/service-accounts/grantable")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: GRANTABLE }),
+        } as Response);
+      }
+      if (href.includes("/api/rag/collections/") && method === "GET") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(COLLECTION_MEMBERS),
+        } as Response);
+      }
+      if (href.includes("/scopes") && method === "POST") {
+        const body = JSON.parse(String(init?.body)) as { type: string; ref: string };
+        postedRefs.push(body.ref);
+        scopes = [...scopes, body];
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { added: body } }),
+        } as Response);
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${href} [${method}]`));
+    });
+
+    render(
+      <UnlinkedServiceAccountModal open isAdmin onOpenChange={jest.fn()} />,
+    );
+
+    await waitFor(() => screen.getByText(/add datasources from a collection/i));
+    const picker = screen.getByRole("combobox", {
+      name: /add datasources from a collection/i,
+    });
+
+    fireEvent.click(picker);
+    fireEvent.click(await screen.findByRole("option", { name: "Collection One" }));
+    await waitFor(() =>
+      expect(screen.getByText(/added 2 datasources from the collection/i)).toBeInTheDocument(),
+    );
+    expect(postedRefs).toEqual(["ds-1", "ds-2"]);
+
+    fireEvent.click(picker);
+    fireEvent.click(await screen.findByRole("option", { name: "Collection One" }));
+    await waitFor(() =>
+      expect(
+        screen.getByText(/no datasources you can grant are in that collection/i),
+      ).toBeInTheDocument(),
+    );
+
+    // Both ds-1 and ds-2 are already granted by the first pick — the second
+    // pick must not re-POST either of them.
+    expect(postedRefs).toEqual(["ds-1", "ds-2"]);
+  });
+
+  it("disables the bulk-add picker when there are no grantable collections", async () => {
+    mockFetch({
+      grantable: { success: true, data: { ...GRANTABLE, collections: [] } },
+    });
+
+    render(
+      <UnlinkedServiceAccountModal open isAdmin onOpenChange={jest.fn()} />,
+    );
+
+    await waitFor(() => screen.getByText(/add datasources from a collection/i));
+    expect(
+      screen.getByRole("combobox", { name: /add datasources from a collection/i }),
+    ).toBeDisabled();
   });
 });
 
