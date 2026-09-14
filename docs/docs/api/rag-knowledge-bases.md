@@ -168,8 +168,8 @@ Creates a personal collection. Service-account callers are rejected.
 
 ### Admin RAG source management
 
-Admin → Settings → RAG has two superadmin tools for datasource-level access,
-both bypassing the publication-approval workflow (immediate effect):
+Admin → Settings → RAG has a superadmin tool for datasource-level access,
+bypassing the publication-approval workflow (immediate effect):
 
 - **Adopt App-Config RAG Sources** (`POST /api/admin/rag/sources/migrate-from-config`)
   moves read-only, app-config-seeded sources into MongoDB as editable
@@ -177,12 +177,24 @@ both bypassing the publication-approval workflow (immediate effect):
   each adopted source. It never adds sources to a collection on the admin's
   behalf — a collection grants no access, so there is nothing to gain by
   defaulting one.
-- **Apply Permissions to a Collection** (`POST /api/admin/rag/collections/{collectionId}/apply-permissions`)
-  bulk-applies an Owner (overwrite) and/or Search Access (replace or
-  additive) directly to every datasource currently in a chosen collection.
-  This is a remediation tool for datasources that used to be searchable only
-  through collection membership before that propagation was removed — it is
-  not a way to make collection membership grant access again.
+
+### Self-service bulk edit
+
+Knowledge Bases → Ingest has a bulk-edit tool available to any user, not just
+superadmins: `POST /api/rag/sources/bulk-update` applies an Owner
+(overwrite) and/or Search Access (replace or additive) across every
+datasource the caller selects. A "select by collection" picker fills the
+selection from a collection's membership as a convenience — the collection
+itself grants nothing, it's only a starting point for picking sources.
+
+Unlike the admin tool above, this is not a bypass: each selected source is
+authorized and applied through the exact same logic
+`PATCH /api/rag/sources/{sourceId}` would apply to it alone — including
+publication approval when it's required. The endpoint literally invokes that
+route's handler once per source rather than re-implementing its logic, so a
+source that needs approval comes back `pending_approval` in the response
+instead of applying immediately, and a source the caller doesn't manage
+comes back `skipped`, exactly as a direct single-source PATCH would behave.
 
 ---
 

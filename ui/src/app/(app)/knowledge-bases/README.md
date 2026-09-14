@@ -25,6 +25,7 @@ Vector DB + Graph DB
 - A source has one Owner (a person or team)
 - Search access is an independent list of people and teams
 - Owners may administer Search grants without automatically granting a team content access
+- A caller who manages multiple sources can select several at once (a "select by collection" picker fills the selection from a collection's membership) and bulk-apply an Owner and/or Search Access - selection is restricted to sources the caller manages, and each one goes through the same authorization and publication-approval logic a single edit would, never a bypass
 - Deep-link state:
   - `ingest=file|web|slack|confluence|jira|webex` selects the creation form
   - repeated `type`, `owner`, and `access` parameters filter visible sources
@@ -82,10 +83,6 @@ Vector DB + Graph DB
 - Adopts already-ingested environment-configured sources into Mongo-backed
   management, setting a real Owner and, optionally, Search Access directly
   on each source (never inherited from a collection)
-- Superadmins can bulk-apply an Owner and/or Search Access (replace or
-  additive) to every datasource currently in a chosen collection - a
-  remediation tool for datasources that used to be searchable only through
-  collection membership, bypassing publication approval
 - Governs self-service connector limits for file uploads, Slack, Confluence, Jira, Web, and Webex
 - Applies connector policies on application API creates, edits, previews, retries, reloads, and file uploads
 - Does not silently rewrite existing source settings; a source outside a newly tightened policy must be adjusted before its next edit or manual reload
