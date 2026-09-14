@@ -1,8 +1,29 @@
+## 1.1.0-rc.2 (2026-09-14)
+
+### Feat
+
+- **setup-caipe**: enable scheduler + autonomous agents by default (#2681)
+- **setup-caipe**: onboard extra LiteLLM models from a file + scan subcommand (#2682)
+
+### Fix
+
+- **setup-caipe**: configure rag-server ingestor OIDC even without UI SSO (#2684)
+- **setup-caipe**: extend the ingress hostAlias to rag-server + web-ingestor (#2675)
+- **setup-caipe**: ask before running sudo (#2668)
+
+## 1.1.0-dev.2 (2026-09-14)
+
+## 1.1.0-dev.1 (2026-09-14)
+
+## 1.1.0-rc.1 (2026-09-14)
+
 ## 1.0.1-dev.12 (2026-09-14)
 
 ### Feat
 
 - **persistence**: add opt-in DocumentDB support (#2418)
+- **rag**: move bulk permission editing to the Ingest page, self-service
+- **rag**: retire Platform RAG as a first-class collection
 
 ### Fix
 
