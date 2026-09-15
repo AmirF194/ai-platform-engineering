@@ -39,6 +39,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { MultiSelect } from "@/components/ui/multi-select";
+import { SearchablePicker } from "@/components/ui/searchable-picker";
+import { fetchCollectionMemberDatasourceIds } from "@/lib/rag-collections-client";
+import { labelledGrantOptions, type GrantableItem } from "@/lib/grantable-options";
 import { TeamPicker, type TeamPickerOption } from "@/components/ui/team-picker";
 import {
   ProviderSelect,
@@ -74,11 +77,6 @@ interface ServiceAccountListItem {
   };
 }
 
-interface GrantableItem {
-  ref: string;
-  name: string;
-}
-
 interface GrantableData {
   agents: GrantableItem[];
   tools: GrantableItem[];
@@ -100,37 +98,6 @@ function normalizeGrantableData(
 interface ScopeRef {
   type: "agent" | "tool" | "datasource" | "collection";
   ref: string;
-}
-
-interface KnowledgeGrantOption extends ScopeRef {
-  label: string;
-}
-
-function knowledgeGrantOptions(
-  collections: GrantableItem[],
-  datasources: GrantableItem[],
-): KnowledgeGrantOption[] {
-  const candidates = [
-    ...collections.map((item) => ({
-      type: "collection" as const,
-      ref: item.ref,
-      baseLabel: `Collection: ${item.name}`,
-    })),
-    ...datasources.map((item) => ({
-      type: "datasource" as const,
-      ref: item.ref,
-      baseLabel: `Datasource: ${item.name}`,
-    })),
-  ];
-  const counts = new Map<string, number>();
-  for (const item of candidates) {
-    counts.set(item.baseLabel, (counts.get(item.baseLabel) ?? 0) + 1);
-  }
-  return candidates.map(({ type, ref, baseLabel }) => ({
-    type,
-    ref,
-    label: counts.get(baseLabel) === 1 ? baseLabel : `${baseLabel} (${ref})`,
-  }));
 }
 
 interface CreatedCredential {
@@ -568,6 +535,13 @@ function CreateServiceAccountDialog({
   const [loadingOptions, setLoadingOptions] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [collectionPickNote, setCollectionPickNote] = useState<string | null>(
+    null,
+  );
+  // Gates the bulk-add picker so two overlapping picks (the popover reopens
+  // instantly after a select) can't both decide the same member id is "not
+  // yet selected" and each add it, producing a duplicate ref.
+  const [addingFromCollection, setAddingFromCollection] = useState(false);
 
   // Reset + load pickers each time the dialog opens.
   useEffect(() => {
@@ -580,6 +554,8 @@ function CreateServiceAccountDialog({
     setSelectedDatasources([]);
     setSelectedCollections([]);
     setFormError(null);
+    setCollectionPickNote(null);
+    setAddingFromCollection(false);
     setGrantableError(false);
     setGrantable({ agents: [], tools: [], datasources: [], collections: [] });
     setLoadingOptions(true);
@@ -624,15 +600,52 @@ function CreateServiceAccountDialog({
   const agentRefToLabel = new Map(grantable.agents.map((a) => [a.ref, a.name]));
   const toolLabelToRef = new Map(grantable.tools.map((t) => [t.name, t.ref]));
   const toolRefToLabel = new Map(grantable.tools.map((t) => [t.ref, t.name]));
-  const knowledgeOptions = knowledgeGrantOptions(
-    grantable.collections,
-    grantable.datasources,
+  const datasourceOptions = labelledGrantOptions(grantable.datasources);
+  const datasourceLabelToRef = new Map(
+    datasourceOptions.map((o) => [o.label, o.ref]),
   );
-  const knowledgeLabelToScope = new Map(
-    knowledgeOptions.map((item) => [item.label, item]),
+  const datasourceRefToLabel = new Map(
+    datasourceOptions.map((o) => [o.ref, o.label]),
   );
-  const knowledgeKeyToLabel = new Map(
-    knowledgeOptions.map((item) => [`${item.type}:${item.ref}`, item.label]),
+  const collectionOptions = labelledGrantOptions(grantable.collections);
+  const collectionLabelToRef = new Map(
+    collectionOptions.map((o) => [o.label, o.ref]),
+  );
+  const collectionRefToLabel = new Map(
+    collectionOptions.map((o) => [o.ref, o.label]),
+  );
+
+  const addDatasourcesFromCollection = useCallback(
+    async (collectionId: string) => {
+      if (addingFromCollection) return;
+      setAddingFromCollection(true);
+      setCollectionPickNote(null);
+      try {
+        const memberIds = await fetchCollectionMemberDatasourceIds(collectionId);
+        const grantableRefs = new Set(grantable.datasources.map((d) => d.ref));
+        const alreadySelected = new Set(selectedDatasources);
+        const addable = memberIds.filter(
+          (id) => grantableRefs.has(id) && !alreadySelected.has(id),
+        );
+        if (addable.length === 0) {
+          setCollectionPickNote(
+            "No datasources you can grant are in that collection.",
+          );
+          return;
+        }
+        setSelectedDatasources((prev) => [...prev, ...addable]);
+        setCollectionPickNote(
+          `Queued ${addable.length} datasource${addable.length === 1 ? "" : "s"} from the collection — they'll be granted when you create the account.`,
+        );
+      } catch (err) {
+        setCollectionPickNote(
+          err instanceof Error ? err.message : "Could not load collection",
+        );
+      } finally {
+        setAddingFromCollection(false);
+      }
+    },
+    [addingFromCollection, grantable.datasources, selectedDatasources],
   );
 
   const submit = useCallback(async () => {
@@ -821,43 +834,85 @@ function CreateServiceAccountDialog({
             </div>
 
             <div className="space-y-1">
-              <label className="text-sm font-medium">RAG Datasources</label>
+              <label className="text-sm font-medium">Datasources</label>
               <MultiSelect
-                options={knowledgeOptions.map((item) => item.label)}
-                selected={[
-                  ...selectedCollections.map((ref) => `collection:${ref}`),
-                  ...selectedDatasources.map((ref) => `datasource:${ref}`),
-                ]
-                  .map((key) => knowledgeKeyToLabel.get(key))
+                options={datasourceOptions.map((o) => o.label)}
+                selected={selectedDatasources
+                  .map((ref) => datasourceRefToLabel.get(ref))
                   .filter((v): v is string => Boolean(v))}
-                onChange={(labels) => {
-                  const selected = labels
-                    .map((label) => knowledgeLabelToScope.get(label))
-                    .filter((value): value is KnowledgeGrantOption =>
-                      Boolean(value),
-                    );
-                  setSelectedCollections(
-                    selected
-                      .filter((item) => item.type === "collection")
-                      .map((item) => item.ref),
-                  );
+                onChange={(labels) =>
                   setSelectedDatasources(
-                    selected
-                      .filter((item) => item.type === "datasource")
-                      .map((item) => item.ref),
-                  );
-                }}
-                placeholder="Grant collections or datasources..."
-                emptyLabel="You hold no RAG knowledge to grant"
-                badgeLabel="knowledge items"
+                    labels
+                      .map((l) => datasourceLabelToRef.get(l))
+                      .filter((v): v is string => Boolean(v)),
+                  )
+                }
+                placeholder="Grant datasources..."
+                emptyLabel="You hold no datasources to grant"
+                badgeLabel="datasources"
+                portalled={false}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Collections</label>
+              <MultiSelect
+                options={collectionOptions.map((o) => o.label)}
+                selected={selectedCollections
+                  .map((ref) => collectionRefToLabel.get(ref))
+                  .filter((v): v is string => Boolean(v))}
+                onChange={(labels) =>
+                  setSelectedCollections(
+                    labels
+                      .map((l) => collectionLabelToRef.get(l))
+                      .filter((v): v is string => Boolean(v)),
+                  )
+                }
+                placeholder="Grant collections..."
+                emptyLabel="You hold no collections to grant"
+                badgeLabel="collections"
                 portalled={false}
               />
               <p className="text-xs text-muted-foreground">
                 A collection grant lets the service account search using that
                 collection as a filter; it does not grant access to its
-                member datasources. Grant datasources directly for content
-                access. The service account can use selected knowledge
-                through direct RAG calls or assigned agents.
+                member datasources. Grant datasources directly, or use
+                &quot;Add datasources from a collection&quot; below, for
+                content access.
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-sm font-medium">
+                Add datasources from a collection
+              </label>
+              <SearchablePicker
+                options={grantable.collections}
+                selected={undefined}
+                onSelect={(item) => void addDatasourcesFromCollection(item.ref)}
+                getOptionKey={(item) => item.ref}
+                getOptionLabel={(item) => item.name}
+                getSearchText={(item) => [item.ref, item.name]}
+                placeholder="Select a collection to bulk-add its datasources..."
+                searchPlaceholder="Search collections..."
+                emptyLabel="No collections available"
+                ariaLabel="Add datasources from a collection"
+                disabled={
+                  grantable.collections.length === 0 || addingFromCollection
+                }
+                portalled={false}
+                triggerClassName="h-9 w-full text-sm"
+              />
+              {collectionPickNote && (
+                <p className="text-xs text-muted-foreground">
+                  {collectionPickNote}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Queues every datasource in the collection that you can grant
+                into the Datasources list above. This does not add the
+                collection itself — grant it separately above if the service
+                account should also use it as a search filter.
               </p>
             </div>
 
@@ -919,12 +974,22 @@ function ManageServiceAccountDialog({
   const [confirmRevoke, setConfirmRevoke] = useState(false);
   const [confirmRotate, setConfirmRotate] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<ScopeRef | null>(null);
+  const [scopeFilter, setScopeFilter] = useState("");
+  // Adding scopes is one bulk call (server batches the check + writes + a
+  // single snapshot refresh — see .../scopes/bulk/route.ts), but a batch of
+  // hundreds can still take a couple of seconds. A visible "Adding N
+  // scopes..." label makes that wait legible from the very first click — a
+  // bare spinner icon is easy to miss at the exact moment Add is clicked.
+  const [addCount, setAddCount] = useState<number | null>(null);
   // Add-scope selection — ref arrays, mirroring the create dialog's grantable
   // pickers (#54: styled MultiSelect, not native <select>).
   const [addAgents, setAddAgents] = useState<string[]>([]);
   const [addTools, setAddTools] = useState<string[]>([]);
   const [addDatasources, setAddDatasources] = useState<string[]>([]);
   const [addCollections, setAddCollections] = useState<string[]>([]);
+  const [collectionPickNote, setCollectionPickNote] = useState<string | null>(
+    null,
+  );
 
   // ── Tokens section state ───────────────────────────────────────────────────
   const [credentials, setCredentials] = useState<ServiceAccountCredential[]>(
@@ -1085,15 +1150,52 @@ function ManageServiceAccountDialog({
   const datasourceNameByRef = new Map(
     grantable.datasources.map((item) => [item.ref, item.name]),
   );
-  const knowledgeOptions = knowledgeGrantOptions(
-    addableCollections,
-    addableDatasources,
+  const addableDatasourceOptions = labelledGrantOptions(addableDatasources);
+  const addDatasourceLabelToRef = new Map(
+    addableDatasourceOptions.map((o) => [o.label, o.ref]),
   );
-  const knowledgeLabelToScope = new Map(
-    knowledgeOptions.map((item) => [item.label, item]),
+  const addDatasourceRefToLabel = new Map(
+    addableDatasourceOptions.map((o) => [o.ref, o.label]),
   );
-  const knowledgeKeyToLabel = new Map(
-    knowledgeOptions.map((item) => [`${item.type}:${item.ref}`, item.label]),
+  const addableCollectionOptions = labelledGrantOptions(addableCollections);
+  const addCollectionLabelToRef = new Map(
+    addableCollectionOptions.map((o) => [o.label, o.ref]),
+  );
+  const addCollectionRefToLabel = new Map(
+    addableCollectionOptions.map((o) => [o.ref, o.label]),
+  );
+
+  const addDatasourcesFromCollection = useCallback(
+    async (collectionId: string) => {
+      if (busy) return;
+      setBusy(true);
+      setCollectionPickNote(null);
+      try {
+        const memberIds = await fetchCollectionMemberDatasourceIds(collectionId);
+        const addableRefs = new Set(addableDatasources.map((d) => d.ref));
+        const alreadyQueued = new Set(addDatasources);
+        const addable = memberIds.filter(
+          (id) => addableRefs.has(id) && !alreadyQueued.has(id),
+        );
+        if (addable.length === 0) {
+          setCollectionPickNote(
+            "No datasources you can grant are in that collection.",
+          );
+          return;
+        }
+        setAddDatasources((prev) => [...prev, ...addable]);
+        setCollectionPickNote(
+          `Queued ${addable.length} datasource${addable.length === 1 ? "" : "s"} from the collection — click Add to apply.`,
+        );
+      } catch (err) {
+        setCollectionPickNote(
+          err instanceof Error ? err.message : "Could not load collection",
+        );
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, addableDatasources, addDatasources],
   );
 
   const addScope = useCallback(async () => {
@@ -1107,26 +1209,30 @@ function ManageServiceAccountDialog({
     if (selected.length === 0) return;
     setBusy(true);
     setError(null);
+    setAddCount(selected.length);
     try {
-      for (const scope of selected) {
-        const res = await fetch(
-          `/api/admin/service-accounts/${encodeURIComponent(saId)}/scopes`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(scope),
-          },
-        );
-        const body = await res.json();
-        if (!res.ok || !body.success) {
-          const message =
-            body.error || `Failed to add ${scope.type} ${scope.ref}`;
-          // Refresh so any scopes that DID get added show, then stop.
-          await refresh();
-          onMutated();
-          setError(message);
-          return;
-        }
+      // One bulk call, not one POST per scope: the server batches the
+      // held-scope check and the OpenFGA writes, and re-derives the
+      // snapshot ONCE instead of once per scope — the whole point of the
+      // bulk endpoint is avoiding hundreds of full rescans.
+      const res = await fetch(
+        `/api/admin/service-accounts/${encodeURIComponent(saId)}/scopes/bulk`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ scopes: selected }),
+        },
+      );
+      const body = await res.json();
+      if (!res.ok || !body.success) {
+        // Refresh in case the batch's OpenFGA write itself partially landed
+        // before a later failure (e.g. the snapshot refresh throwing) —
+        // the held-scope check and the tuple write are each atomic on
+        // their own, but the two together aren't a single transaction.
+        await refresh();
+        onMutated();
+        setError(body.error || "Failed to add scopes");
+        return;
       }
       setAddAgents([]);
       setAddTools([]);
@@ -1136,6 +1242,7 @@ function ManageServiceAccountDialog({
       onMutated();
     } finally {
       setBusy(false);
+      setAddCount(null);
     }
   }, [
     saId,
@@ -1339,7 +1446,13 @@ function ManageServiceAccountDialog({
           // Dialog scroll: cap height and let content scroll vertically so the
           // dialog doesn't overflow the viewport when credentials + scopes stack up.
           <div className="max-h-[65vh] overflow-y-auto space-y-4 pr-1">
-            {/* Current scopes */}
+            {/* Current scopes.
+                KEEP IN SYNC: the filter-input-above-8-items + bounded
+                max-h-56 scroll container mirrors UnlinkedServiceAccountModal.tsx's
+                "Current scopes" list — a service account (unlinked or not)
+                can hold hundreds of datasource scopes, so both lists need
+                their own scroll region and a way to narrow it down
+                independent of the surrounding dialog's scroll. */}
             <div className="space-y-2">
               <span className="text-sm font-medium">Current scopes</span>
               {detail.scopes.length === 0 ? (
@@ -1348,8 +1461,30 @@ function ManageServiceAccountDialog({
                   knowledge yet.
                 </p>
               ) : (
-                <ul className="space-y-1">
-                  {detail.scopes.map((scope) => {
+                <>
+                  {detail.scopes.length > 8 && (
+                    <Input
+                      value={scopeFilter}
+                      onChange={(e) => setScopeFilter(e.target.value)}
+                      placeholder="Filter current scopes..."
+                      aria-label="Filter current scopes"
+                      className="h-8 text-xs"
+                    />
+                  )}
+                  <ul className="max-h-56 space-y-1 overflow-y-auto pr-1">
+                  {detail.scopes
+                    .filter((scope) => {
+                      const displayName =
+                        scope.type === "collection"
+                          ? collectionNameByRef.get(scope.ref)
+                          : scope.type === "datasource"
+                            ? datasourceNameByRef.get(scope.ref)
+                            : undefined;
+                      const haystack =
+                        `${scope.type} ${scope.ref} ${displayName ?? ""}`.toLowerCase();
+                      return haystack.includes(scopeFilter.trim().toLowerCase());
+                    })
+                    .map((scope) => {
                     const isPending =
                       pendingRemove?.type === scope.type &&
                       pendingRemove?.ref === scope.ref;
@@ -1374,7 +1509,11 @@ function ManageServiceAccountDialog({
                           ) : (
                             <Wrench className="h-3.5 w-3.5 text-muted-foreground" />
                           )}
-                          <code className="text-xs" title={scope.ref}>
+                          <code
+                            className="text-xs"
+                            title={scope.ref}
+                            data-testid={`scope-${scope.type}-${scope.ref}`}
+                          >
                             {displayName ?? scope.ref}
                           </code>
                         </span>
@@ -1422,13 +1561,21 @@ function ManageServiceAccountDialog({
                       </li>
                     );
                   })}
-                </ul>
+                  </ul>
+                </>
               )}
             </div>
 
             {/* Add scope (bounded by what the editor holds). Uses the app's
                 styled MultiSelect — same picker as the create dialog (#54), not
-                native browser <select>. */}
+                native browser <select>.
+                KEEP IN SYNC: this block (4 MultiSelects + staged Add + the
+                "Add datasources from a collection" bulk picker) is
+                intentionally mirrored by UnlinkedServiceAccountModal.tsx's
+                "Add scopes" block. If you change the UX/copy/behavior here,
+                change it there too, and vice versa — editing the unlinked SA
+                should look and behave exactly like editing any other
+                service account. */}
             <div className="space-y-3 rounded-md border border-dashed border-input p-3">
               <span className="text-sm font-medium">Add scopes</span>
               <div className="space-y-1">
@@ -1477,40 +1624,95 @@ function ManageServiceAccountDialog({
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-muted-foreground">
-                  RAG Datasources
+                  Datasources
                 </label>
                 <MultiSelect
-                  options={knowledgeOptions.map((item) => item.label)}
-                  selected={[
-                    ...addCollections.map((ref) => `collection:${ref}`),
-                    ...addDatasources.map((ref) => `datasource:${ref}`),
-                  ]
-                    .map((key) => knowledgeKeyToLabel.get(key))
+                  options={addableDatasourceOptions.map((o) => o.label)}
+                  selected={addDatasources
+                    .map((ref) => addDatasourceRefToLabel.get(ref))
                     .filter((v): v is string => Boolean(v))}
-                  onChange={(labels) => {
-                    const selected = labels
-                      .map((label) => knowledgeLabelToScope.get(label))
-                      .filter((value): value is KnowledgeGrantOption =>
-                        Boolean(value),
-                      );
-                    setAddCollections(
-                      selected
-                        .filter((item) => item.type === "collection")
-                        .map((item) => item.ref),
-                    );
+                  onChange={(labels) =>
                     setAddDatasources(
-                      selected
-                        .filter((item) => item.type === "datasource")
-                        .map((item) => item.ref),
-                    );
-                  }}
-                  placeholder="Add collections or datasources..."
-                  emptyLabel="No more RAG knowledge you can grant"
-                  badgeLabel="knowledge items"
+                      labels
+                        .map((l) => addDatasourceLabelToRef.get(l))
+                        .filter((v): v is string => Boolean(v)),
+                    )
+                  }
+                  placeholder="Add datasources..."
+                  emptyLabel="No more datasources you can grant"
+                  badgeLabel="datasources"
                   portalled={false}
                 />
               </div>
-              <div className="flex justify-end">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">
+                  Collections
+                </label>
+                <MultiSelect
+                  options={addableCollectionOptions.map((o) => o.label)}
+                  selected={addCollections
+                    .map((ref) => addCollectionRefToLabel.get(ref))
+                    .filter((v): v is string => Boolean(v))}
+                  onChange={(labels) =>
+                    setAddCollections(
+                      labels
+                        .map((l) => addCollectionLabelToRef.get(l))
+                        .filter((v): v is string => Boolean(v)),
+                    )
+                  }
+                  placeholder="Add collections..."
+                  emptyLabel="No more collections you can grant"
+                  badgeLabel="collections"
+                  portalled={false}
+                />
+                <p className="text-xs text-muted-foreground">
+                  A collection grant lets the service account search using
+                  that collection as a filter; it does not grant access to
+                  its member datasources. Grant datasources directly, or use
+                  &quot;Add datasources from a collection&quot; below, for
+                  content access.
+                </p>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">
+                  Add datasources from a collection
+                </label>
+                <SearchablePicker
+                  options={grantable.collections}
+                  selected={undefined}
+                  onSelect={(item) =>
+                    void addDatasourcesFromCollection(item.ref)
+                  }
+                  getOptionKey={(item) => item.ref}
+                  getOptionLabel={(item) => item.name}
+                  getSearchText={(item) => [item.ref, item.name]}
+                  placeholder="Select a collection to bulk-add its datasources..."
+                  searchPlaceholder="Search collections..."
+                  emptyLabel="No collections available"
+                  ariaLabel="Add datasources from a collection"
+                  disabled={busy || grantable.collections.length === 0}
+                  portalled={false}
+                  triggerClassName="h-9 w-full text-sm"
+                />
+                {collectionPickNote && (
+                  <p className="text-xs text-muted-foreground">
+                    {collectionPickNote}
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Queues every datasource in the collection that you can
+                  grant into the Datasources list above — click Add to
+                  apply. This does not add the collection itself — grant it
+                  separately above if the service account should also use
+                  it as a search filter.
+                </p>
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                {addCount !== null && (
+                  <span className="text-xs text-muted-foreground">
+                    Adding {addCount} scope{addCount === 1 ? "" : "s"}...
+                  </span>
+                )}
                 <Button
                   onClick={addScope}
                   disabled={
@@ -1522,6 +1724,7 @@ function ManageServiceAccountDialog({
                   }
                   className="gap-1.5"
                 >
+                  {busy && <Loader2 className="h-4 w-4 animate-spin" />}
                   <Plus className="h-4 w-4" />
                   Add
                 </Button>
