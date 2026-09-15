@@ -462,4 +462,87 @@ describe("ServiceAccountsTab — ManageServiceAccountDialog knowledge pickers", 
       screen.getByRole("combobox", { name: /add datasources from a collection/i }),
     ).toBeDisabled();
   });
+
+  it("keeps a collection available in the bulk-add picker even after it has already been granted as a scope", async () => {
+    // Granting a collection is a search-filter-only scope and is unrelated
+    // to whether its member datasources can still be bulk-added — the
+    // collection must not disappear from the bulk-add picker just because
+    // it's already a direct grant.
+    mockCommonEndpoints({
+      saDetail: {
+        success: true,
+        data: {
+          id: SERVICE_ACCOUNTS[0].id,
+          name: SERVICE_ACCOUNTS[0].name,
+          owning_team_id: "example-team",
+          created_by: "test-user",
+          created_at: "2026-06-15T12:00:00.000Z",
+          status: "active",
+          scopes: [{ type: "collection", ref: "coll-1" }],
+        },
+      },
+    });
+    const user = await openManageDialog();
+
+    const picker = screen.getByRole("combobox", {
+      name: /add datasources from a collection/i,
+    });
+    expect(picker).not.toBeDisabled();
+    await user.click(picker);
+    expect(await screen.findByRole("option", { name: "Collection One" })).toBeInTheDocument();
+  });
+
+  it("does not show a Current-scopes filter input for a short scope list", async () => {
+    mockCommonEndpoints({
+      saDetail: {
+        success: true,
+        data: {
+          id: SERVICE_ACCOUNTS[0].id,
+          name: SERVICE_ACCOUNTS[0].name,
+          owning_team_id: "example-team",
+          created_by: "test-user",
+          created_at: "2026-06-15T12:00:00.000Z",
+          status: "active",
+          scopes: [{ type: "datasource", ref: "ds-1" }],
+        },
+      },
+    });
+    await openManageDialog();
+
+    expect(
+      screen.queryByRole("textbox", { name: /filter current scopes/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows a Current-scopes filter input for a long scope list, and filters by it", async () => {
+    const manyScopes = Array.from({ length: 12 }, (_, i) => ({
+      type: "datasource" as const,
+      ref: `bulk-ds-${i + 1}`,
+    }));
+    mockCommonEndpoints({
+      saDetail: {
+        success: true,
+        data: {
+          id: SERVICE_ACCOUNTS[0].id,
+          name: SERVICE_ACCOUNTS[0].name,
+          owning_team_id: "example-team",
+          created_by: "test-user",
+          created_at: "2026-06-15T12:00:00.000Z",
+          status: "active",
+          scopes: manyScopes,
+        },
+      },
+    });
+    const user = await openManageDialog();
+
+    expect(screen.getByTestId("scope-datasource-bulk-ds-1")).toBeInTheDocument();
+    expect(screen.getByTestId("scope-datasource-bulk-ds-12")).toBeInTheDocument();
+
+    const filterInput = screen.getByRole("textbox", { name: /filter current scopes/i });
+    await user.type(filterInput, "bulk-ds-7");
+
+    expect(screen.getByTestId("scope-datasource-bulk-ds-7")).toBeInTheDocument();
+    expect(screen.queryByTestId("scope-datasource-bulk-ds-1")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("scope-datasource-bulk-ds-12")).not.toBeInTheDocument();
+  });
 });

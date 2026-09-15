@@ -41,6 +41,7 @@ import { Input } from "@/components/ui/input";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { SearchablePicker } from "@/components/ui/searchable-picker";
 import { fetchCollectionMemberDatasourceIds } from "@/lib/rag-collections-client";
+import { labelledGrantOptions, type GrantableItem } from "@/lib/grantable-options";
 import { TeamPicker, type TeamPickerOption } from "@/components/ui/team-picker";
 import {
   ProviderSelect,
@@ -76,11 +77,6 @@ interface ServiceAccountListItem {
   };
 }
 
-interface GrantableItem {
-  ref: string;
-  name: string;
-}
-
 interface GrantableData {
   agents: GrantableItem[];
   tools: GrantableItem[];
@@ -103,24 +99,6 @@ interface ScopeRef {
   type: "agent" | "tool" | "datasource" | "collection";
   ref: string;
 }
-
-interface LabelledGrantOption {
-  ref: string;
-  label: string;
-}
-
-/** Disambiguates same-named items within one list by appending `(ref)`. */
-function labelledGrantOptions(items: GrantableItem[]): LabelledGrantOption[] {
-  const counts = new Map<string, number>();
-  for (const item of items) {
-    counts.set(item.name, (counts.get(item.name) ?? 0) + 1);
-  }
-  return items.map((item) => ({
-    ref: item.ref,
-    label: counts.get(item.name) === 1 ? item.name : `${item.name} (${item.ref})`,
-  }));
-}
-
 
 interface CreatedCredential {
   client_id: string;
@@ -996,6 +974,7 @@ function ManageServiceAccountDialog({
   const [confirmRevoke, setConfirmRevoke] = useState(false);
   const [confirmRotate, setConfirmRotate] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<ScopeRef | null>(null);
+  const [scopeFilter, setScopeFilter] = useState("");
   // Add-scope selection — ref arrays, mirroring the create dialog's grantable
   // pickers (#54: styled MultiSelect, not native <select>).
   const [addAgents, setAddAgents] = useState<string[]>([]);
@@ -1456,7 +1435,13 @@ function ManageServiceAccountDialog({
           // Dialog scroll: cap height and let content scroll vertically so the
           // dialog doesn't overflow the viewport when credentials + scopes stack up.
           <div className="max-h-[65vh] overflow-y-auto space-y-4 pr-1">
-            {/* Current scopes */}
+            {/* Current scopes.
+                KEEP IN SYNC: the filter-input-above-8-items + bounded
+                max-h-56 scroll container mirrors UnlinkedServiceAccountModal.tsx's
+                "Current scopes" list — a service account (unlinked or not)
+                can hold hundreds of datasource scopes, so both lists need
+                their own scroll region and a way to narrow it down
+                independent of the surrounding dialog's scroll. */}
             <div className="space-y-2">
               <span className="text-sm font-medium">Current scopes</span>
               {detail.scopes.length === 0 ? (
@@ -1465,8 +1450,30 @@ function ManageServiceAccountDialog({
                   knowledge yet.
                 </p>
               ) : (
-                <ul className="space-y-1">
-                  {detail.scopes.map((scope) => {
+                <>
+                  {detail.scopes.length > 8 && (
+                    <Input
+                      value={scopeFilter}
+                      onChange={(e) => setScopeFilter(e.target.value)}
+                      placeholder="Filter current scopes..."
+                      aria-label="Filter current scopes"
+                      className="h-8 text-xs"
+                    />
+                  )}
+                  <ul className="max-h-56 space-y-1 overflow-y-auto pr-1">
+                  {detail.scopes
+                    .filter((scope) => {
+                      const displayName =
+                        scope.type === "collection"
+                          ? collectionNameByRef.get(scope.ref)
+                          : scope.type === "datasource"
+                            ? datasourceNameByRef.get(scope.ref)
+                            : undefined;
+                      const haystack =
+                        `${scope.type} ${scope.ref} ${displayName ?? ""}`.toLowerCase();
+                      return haystack.includes(scopeFilter.trim().toLowerCase());
+                    })
+                    .map((scope) => {
                     const isPending =
                       pendingRemove?.type === scope.type &&
                       pendingRemove?.ref === scope.ref;
@@ -1491,7 +1498,11 @@ function ManageServiceAccountDialog({
                           ) : (
                             <Wrench className="h-3.5 w-3.5 text-muted-foreground" />
                           )}
-                          <code className="text-xs" title={scope.ref}>
+                          <code
+                            className="text-xs"
+                            title={scope.ref}
+                            data-testid={`scope-${scope.type}-${scope.ref}`}
+                          >
                             {displayName ?? scope.ref}
                           </code>
                         </span>
@@ -1539,13 +1550,21 @@ function ManageServiceAccountDialog({
                       </li>
                     );
                   })}
-                </ul>
+                  </ul>
+                </>
               )}
             </div>
 
             {/* Add scope (bounded by what the editor holds). Uses the app's
                 styled MultiSelect — same picker as the create dialog (#54), not
-                native browser <select>. */}
+                native browser <select>.
+                KEEP IN SYNC: this block (4 MultiSelects + staged Add + the
+                "Add datasources from a collection" bulk picker) is
+                intentionally mirrored by UnlinkedServiceAccountModal.tsx's
+                "Add scopes" block. If you change the UX/copy/behavior here,
+                change it there too, and vice versa — editing the unlinked SA
+                should look and behave exactly like editing any other
+                service account. */}
             <div className="space-y-3 rounded-md border border-dashed border-input p-3">
               <span className="text-sm font-medium">Add scopes</span>
               <div className="space-y-1">
@@ -1648,7 +1667,7 @@ function ManageServiceAccountDialog({
                   Add datasources from a collection
                 </label>
                 <SearchablePicker
-                  options={addableCollections}
+                  options={grantable.collections}
                   selected={undefined}
                   onSelect={(item) =>
                     void addDatasourcesFromCollection(item.ref)
@@ -1660,7 +1679,7 @@ function ManageServiceAccountDialog({
                   searchPlaceholder="Search collections..."
                   emptyLabel="No collections available"
                   ariaLabel="Add datasources from a collection"
-                  disabled={busy || addableCollections.length === 0}
+                  disabled={busy || grantable.collections.length === 0}
                   portalled={false}
                   triggerClassName="h-9 w-full text-sm"
                 />
