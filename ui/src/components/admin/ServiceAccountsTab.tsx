@@ -635,7 +635,7 @@ function CreateServiceAccountDialog({
         }
         setSelectedDatasources((prev) => [...prev, ...addable]);
         setCollectionPickNote(
-          `Added ${addable.length} datasource${addable.length === 1 ? "" : "s"} from the collection.`,
+          `Queued ${addable.length} datasource${addable.length === 1 ? "" : "s"} from the collection — they'll be granted when you create the account.`,
         );
       } catch (err) {
         setCollectionPickNote(
@@ -909,10 +909,10 @@ function CreateServiceAccountDialog({
                 </p>
               )}
               <p className="text-xs text-muted-foreground">
-                Adds every datasource in the collection that you can grant to
-                the Datasources list above. This does not add the collection
-                itself — grant it separately above if the service account
-                should also use it as a search filter.
+                Queues every datasource in the collection that you can grant
+                into the Datasources list above. This does not add the
+                collection itself — grant it separately above if the service
+                account should also use it as a search filter.
               </p>
             </div>
 
@@ -975,6 +975,14 @@ function ManageServiceAccountDialog({
   const [confirmRotate, setConfirmRotate] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<ScopeRef | null>(null);
   const [scopeFilter, setScopeFilter] = useState("");
+  // Adding scopes POSTs one at a time (server-authoritative, stop-on-first-
+  // failure), so a bulk-add-by-collection batch of hundreds can take tens of
+  // seconds. A live "N of M" count makes that wait legible from the very
+  // first click — a bare spinner icon is easy to miss at the exact moment
+  // Add is clicked, and with no other feedback the dialog can look hung.
+  const [addProgress, setAddProgress] = useState<
+    { done: number; total: number } | null
+  >(null);
   // Add-scope selection — ref arrays, mirroring the create dialog's grantable
   // pickers (#54: styled MultiSelect, not native <select>).
   const [addAgents, setAddAgents] = useState<string[]>([]);
@@ -1179,7 +1187,7 @@ function ManageServiceAccountDialog({
         }
         setAddDatasources((prev) => [...prev, ...addable]);
         setCollectionPickNote(
-          `Added ${addable.length} datasource${addable.length === 1 ? "" : "s"} from the collection.`,
+          `Queued ${addable.length} datasource${addable.length === 1 ? "" : "s"} from the collection — click Add to apply.`,
         );
       } catch (err) {
         setCollectionPickNote(
@@ -1203,7 +1211,9 @@ function ManageServiceAccountDialog({
     if (selected.length === 0) return;
     setBusy(true);
     setError(null);
+    setAddProgress({ done: 0, total: selected.length });
     try {
+      let done = 0;
       for (const scope of selected) {
         const res = await fetch(
           `/api/admin/service-accounts/${encodeURIComponent(saId)}/scopes`,
@@ -1223,6 +1233,8 @@ function ManageServiceAccountDialog({
           setError(message);
           return;
         }
+        done += 1;
+        setAddProgress({ done, total: selected.length });
       }
       setAddAgents([]);
       setAddTools([]);
@@ -1232,6 +1244,7 @@ function ManageServiceAccountDialog({
       onMutated();
     } finally {
       setBusy(false);
+      setAddProgress(null);
     }
   }, [
     saId,
@@ -1689,13 +1702,19 @@ function ManageServiceAccountDialog({
                   </p>
                 )}
                 <p className="text-xs text-muted-foreground">
-                  Adds every datasource in the collection that you can grant
-                  to the Datasources list above. This does not add the
-                  collection itself — grant it separately above if the
-                  service account should also use it as a search filter.
+                  Queues every datasource in the collection that you can
+                  grant into the Datasources list above — click Add to
+                  apply. This does not add the collection itself — grant it
+                  separately above if the service account should also use
+                  it as a search filter.
                 </p>
               </div>
-              <div className="flex justify-end">
+              <div className="flex items-center justify-end gap-2">
+                {addProgress && (
+                  <span className="text-xs text-muted-foreground">
+                    Adding {addProgress.done} of {addProgress.total}...
+                  </span>
+                )}
                 <Button
                   onClick={addScope}
                   disabled={
@@ -1707,6 +1726,7 @@ function ManageServiceAccountDialog({
                   }
                   className="gap-1.5"
                 >
+                  {busy && <Loader2 className="h-4 w-4 animate-spin" />}
                   <Plus className="h-4 w-4" />
                   Add
                 </Button>

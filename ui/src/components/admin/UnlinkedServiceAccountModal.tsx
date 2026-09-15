@@ -99,6 +99,15 @@ export function UnlinkedServiceAccountModal({
   const [collectionPickNote, setCollectionPickNote] = useState<string | null>(
     null,
   );
+  // KEEP IN SYNC with ManageServiceAccountDialog's addScope in
+  // ServiceAccountsTab.tsx — adding scopes POSTs one at a time
+  // (server-authoritative, stop-on-first-failure), so a bulk-add-by-collection
+  // batch of hundreds can take tens of seconds. A live "N of M" count makes
+  // that wait legible from the very first click — a bare spinner icon is
+  // easy to miss at the exact moment Add is clicked.
+  const [addProgress, setAddProgress] = useState<
+    { done: number; total: number } | null
+  >(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -185,7 +194,9 @@ export function UnlinkedServiceAccountModal({
     if (selected.length === 0) return;
     setBusy(true);
     setError(null);
+    setAddProgress({ done: 0, total: selected.length });
     try {
+      let done = 0;
       for (const scope of selected) {
         const res = await fetch(
           `/api/admin/service-accounts/${encodeURIComponent(sa.id)}/scopes`,
@@ -204,6 +215,8 @@ export function UnlinkedServiceAccountModal({
           setError(message);
           return;
         }
+        done += 1;
+        setAddProgress({ done, total: selected.length });
       }
       setAddAgents([]);
       setAddTools([]);
@@ -212,6 +225,7 @@ export function UnlinkedServiceAccountModal({
       await refresh();
     } finally {
       setBusy(false);
+      setAddProgress(null);
     }
   }, [sa, addAgents, addTools, addDatasources, addCollections, refresh]);
 
@@ -571,7 +585,12 @@ export function UnlinkedServiceAccountModal({
                       </p>
                     </div>
 
-                    <div className="flex justify-end">
+                    <div className="flex items-center justify-end gap-2">
+                      {addProgress && (
+                        <span className="text-xs text-muted-foreground">
+                          Adding {addProgress.done} of {addProgress.total}...
+                        </span>
+                      )}
                       <Button
                         onClick={addScopes}
                         disabled={

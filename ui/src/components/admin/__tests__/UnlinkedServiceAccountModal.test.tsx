@@ -266,6 +266,31 @@ describe("UnlinkedServiceAccountModal", () => {
     expect(screen.getByRole("button", { name: /add datasources/i })).toBeInTheDocument();
   });
 
+  it("shows an 'Adding N of M' progress count immediately on click, clearing when done", async () => {
+    const user = userEvent.setup();
+    render(
+      <UnlinkedServiceAccountModal open isAdmin onOpenChange={jest.fn()} />,
+    );
+
+    await waitFor(() => screen.getByText(/add scopes/i));
+    await user.click(screen.getByRole("button", { name: /add agents/i }));
+    await user.click(await screen.findByRole("button", { name: "SRE Agent" }));
+    await user.click(screen.getByText(/owned by one of your teams|set the starting access/i));
+    await user.click(screen.getByRole("button", { name: /add datasources/i }));
+    await user.click(await screen.findByRole("button", { name: "Datasource One" }));
+    await user.click(screen.getByText(/owned by one of your teams|set the starting access/i));
+
+    fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+
+    // Visible the instant Add is clicked — not just partway through the
+    // sequential POST loop, so a large batch never looks hung at the start.
+    expect(screen.getByText(/adding 0 of 2\.\.\./i)).toBeInTheDocument();
+
+    await waitFor(() =>
+      expect(screen.queryByText(/adding \d+ of \d+\.\.\./i)).not.toBeInTheDocument(),
+    );
+  });
+
   it("adds a collection scope, and always shows the search-filter-only note", async () => {
     const user = userEvent.setup();
     render(

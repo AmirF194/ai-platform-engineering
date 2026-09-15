@@ -211,7 +211,7 @@ describe("ServiceAccountsTab — CreateServiceAccountDialog knowledge pickers", 
 
     await waitFor(() => {
       expect(
-        screen.getByText(/added 2 datasources from the collection/i),
+        screen.getByText(/queued 2 datasources from the collection/i),
       ).toBeInTheDocument();
     });
     // Both grantable member ids now show as selected badges on the Datasources picker.
@@ -228,7 +228,7 @@ describe("ServiceAccountsTab — CreateServiceAccountDialog knowledge pickers", 
     await user.click(await screen.findByRole("option", { name: "Collection One" }));
 
     await waitFor(() =>
-      expect(screen.getByText(/added 2 datasources/i)).toBeInTheDocument(),
+      expect(screen.getByText(/queued 2 datasources/i)).toBeInTheDocument(),
     );
     // Collections picker stays empty — bulk-add only ever touches Datasources.
     expect(screen.getByRole("button", { name: /grant collections/i })).toBeInTheDocument();
@@ -283,7 +283,7 @@ describe("ServiceAccountsTab — CreateServiceAccountDialog knowledge pickers", 
 
     // Only ds-2 is newly added since ds-1 was already selected.
     await waitFor(() => {
-      expect(screen.getByText(/added 1 datasource from the collection/i)).toBeInTheDocument();
+      expect(screen.getByText(/queued 1 datasource from the collection/i)).toBeInTheDocument();
     });
   });
 
@@ -342,7 +342,7 @@ describe("ServiceAccountsTab — CreateServiceAccountDialog knowledge pickers", 
 
     resolveCollectionFetch?.(undefined);
     await waitFor(() =>
-      expect(screen.getByText(/added 2 datasources from the collection/i)).toBeInTheDocument(),
+      expect(screen.getByText(/queued 2 datasources from the collection/i)).toBeInTheDocument(),
     );
 
     // Exactly one badge per datasource — not duplicated.
@@ -397,7 +397,7 @@ describe("ServiceAccountsTab — ManageServiceAccountDialog knowledge pickers", 
 
     await waitFor(() => {
       expect(
-        screen.getByText(/added 2 datasources from the collection/i),
+        screen.getByText(/queued 2 datasources from the collection/i),
       ).toBeInTheDocument();
     });
     expect(screen.getByText("Datasource One")).toBeInTheDocument();
@@ -430,7 +430,7 @@ describe("ServiceAccountsTab — ManageServiceAccountDialog knowledge pickers", 
     await user.click(await screen.findByRole("option", { name: "Collection One" }));
 
     await waitFor(() => {
-      expect(screen.getByText(/added 1 datasource from the collection/i)).toBeInTheDocument();
+      expect(screen.getByText(/queued 1 datasource from the collection/i)).toBeInTheDocument();
     });
   });
 
@@ -544,5 +544,30 @@ describe("ServiceAccountsTab — ManageServiceAccountDialog knowledge pickers", 
     expect(screen.getByTestId("scope-datasource-bulk-ds-7")).toBeInTheDocument();
     expect(screen.queryByTestId("scope-datasource-bulk-ds-1")).not.toBeInTheDocument();
     expect(screen.queryByTestId("scope-datasource-bulk-ds-12")).not.toBeInTheDocument();
+  });
+
+  it("shows an 'Adding N of M' progress count immediately on Add click, clearing when done", async () => {
+    const user = await openManageDialog();
+
+    await user.click(screen.getByRole("button", { name: /add datasources/i }));
+    await user.click(await screen.findByRole("button", { name: "Datasource One" }));
+    await user.click(screen.getByText(/manage scopes, rotate the credential/i));
+
+    fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+
+    // Visible the instant Add is clicked — not just partway through the
+    // sequential POST loop, so a large batch never looks hung at the start.
+    expect(screen.getByText(/adding 0 of 1\.\.\./i)).toBeInTheDocument();
+
+    await waitFor(() =>
+      expect(screen.queryByText(/adding \d+ of \d+\.\.\./i)).not.toBeInTheDocument(),
+    );
+    expect(global.fetch).toHaveBeenCalledWith(
+      `/api/admin/service-accounts/${SERVICE_ACCOUNTS[0].id}/scopes`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ type: "datasource", ref: "ds-1" }),
+      }),
+    );
   });
 });
