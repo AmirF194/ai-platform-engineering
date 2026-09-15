@@ -226,7 +226,7 @@ describe("UnlinkedServiceAccountModal", () => {
     });
   });
 
-  it("sends a POST per staged scope, across every type, and clears the pickers on success", async () => {
+  it("sends ONE bulk POST carrying every staged scope, across every type, and clears the pickers on success", async () => {
     const user = userEvent.setup();
     render(
       <UnlinkedServiceAccountModal open isAdmin onOpenChange={jest.fn()} />,
@@ -246,27 +246,30 @@ describe("UnlinkedServiceAccountModal", () => {
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        `/api/admin/service-accounts/${encodeURIComponent(ANON_SA.id)}/scopes`,
+        `/api/admin/service-accounts/${encodeURIComponent(ANON_SA.id)}/scopes/bulk`,
         expect.objectContaining({
           method: "POST",
-          body: JSON.stringify({ type: "agent", ref: "sre-agent" }),
-        }),
-      );
-      expect(global.fetch).toHaveBeenCalledWith(
-        `/api/admin/service-accounts/${encodeURIComponent(ANON_SA.id)}/scopes`,
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ type: "datasource", ref: "ds-1" }),
+          body: JSON.stringify({
+            scopes: [
+              { type: "agent", ref: "sre-agent" },
+              { type: "datasource", ref: "ds-1" },
+            ],
+          }),
         }),
       );
     });
+    // Exactly one bulk call — not one POST per scope.
+    const bulkCalls = (global.fetch as jest.Mock).mock.calls.filter(
+      ([href]) => String(href).endsWith("/scopes/bulk"),
+    );
+    expect(bulkCalls).toHaveLength(1);
 
     // Pickers reset back to their empty placeholder after a successful Add.
     expect(screen.getByRole("button", { name: /add agents/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /add datasources/i })).toBeInTheDocument();
   });
 
-  it("shows an 'Adding N of M' progress count immediately on click, clearing when done", async () => {
+  it("shows an 'Adding N scopes' progress label immediately on click, clearing when done", async () => {
     const user = userEvent.setup();
     render(
       <UnlinkedServiceAccountModal open isAdmin onOpenChange={jest.fn()} />,
@@ -282,12 +285,12 @@ describe("UnlinkedServiceAccountModal", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
 
-    // Visible the instant Add is clicked — not just partway through the
-    // sequential POST loop, so a large batch never looks hung at the start.
-    expect(screen.getByText(/adding 0 of 2\.\.\./i)).toBeInTheDocument();
+    // Visible the instant Add is clicked, not just once the bulk request
+    // resolves, so even a large batch never looks hung at the start.
+    expect(screen.getByText(/adding 2 scopes\.\.\./i)).toBeInTheDocument();
 
     await waitFor(() =>
-      expect(screen.queryByText(/adding \d+ of \d+\.\.\./i)).not.toBeInTheDocument(),
+      expect(screen.queryByText(/adding \d+ scopes?\.\.\./i)).not.toBeInTheDocument(),
     );
   });
 
@@ -309,16 +312,16 @@ describe("UnlinkedServiceAccountModal", () => {
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        `/api/admin/service-accounts/${encodeURIComponent(ANON_SA.id)}/scopes`,
+        `/api/admin/service-accounts/${encodeURIComponent(ANON_SA.id)}/scopes/bulk`,
         expect.objectContaining({
           method: "POST",
-          body: JSON.stringify({ type: "collection", ref: "coll-1" }),
+          body: JSON.stringify({ scopes: [{ type: "collection", ref: "coll-1" }] }),
         }),
       );
     });
   });
 
-  it("shows a single error banner and stops on the first failure across staged scopes", async () => {
+  it("shows a single error banner when the bulk Add fails", async () => {
     mockFetch({
       scopePost: { success: false, error: "You cannot grant a scope you do not hold" },
     });
@@ -465,37 +468,36 @@ describe("UnlinkedServiceAccountModal — bulk-add datasources from a collection
       expect.objectContaining({ method: "POST" }),
     );
 
-    // Clicking Add is what actually applies it.
+    // Clicking Add is what actually applies it — as one bulk call.
     fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        `/api/admin/service-accounts/${encodeURIComponent(ANON_SA.id)}/scopes`,
+        `/api/admin/service-accounts/${encodeURIComponent(ANON_SA.id)}/scopes/bulk`,
         expect.objectContaining({
           method: "POST",
-          body: JSON.stringify({ type: "datasource", ref: "ds-1" }),
-        }),
-      );
-      expect(global.fetch).toHaveBeenCalledWith(
-        `/api/admin/service-accounts/${encodeURIComponent(ANON_SA.id)}/scopes`,
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ type: "datasource", ref: "ds-2" }),
+          body: JSON.stringify({
+            scopes: [
+              { type: "datasource", ref: "ds-1" },
+              { type: "datasource", ref: "ds-2" },
+            ],
+          }),
         }),
       );
     });
-    // The non-grantable member id must never be POSTed, and the collection
-    // itself must never be added.
-    expect(global.fetch).not.toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        body: JSON.stringify({ type: "datasource", ref: "ds-not-grantable" }),
-      }),
+    // The non-grantable member id must never be included, and the
+    // collection itself must never be added.
+    const bulkBody = JSON.parse(
+      String(
+        (global.fetch as jest.Mock).mock.calls.find(([href]) =>
+          String(href).endsWith("/scopes/bulk"),
+        )?.[1]?.body,
+      ),
     );
-    expect(global.fetch).not.toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        body: JSON.stringify({ type: "collection", ref: "coll-1" }),
-      }),
+    expect(bulkBody.scopes).not.toEqual(
+      expect.arrayContaining([{ type: "datasource", ref: "ds-not-grantable" }]),
+    );
+    expect(bulkBody.scopes).not.toEqual(
+      expect.arrayContaining([{ type: "collection", ref: "coll-1" }]),
     );
   });
 

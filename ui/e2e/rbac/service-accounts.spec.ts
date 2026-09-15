@@ -189,18 +189,27 @@ test.describe("mocked service accounts browser regression", () => {
         return true;
       }
 
+      if (
+        path === "/api/admin/service-accounts/sa-sub-playwright/scopes/bulk" &&
+        method === "POST"
+      ) {
+        const body = (await postJson(route)) as { scopes: ScopeRef[] };
+        requests.push({ method, path, body });
+        scopes.push(...body.scopes);
+        items = items.map((item) => ({
+          ...item,
+          scope_counts: counts(scopes),
+        }));
+        await fulfillJson(route, {
+          success: true,
+          data: { added: body.scopes, added_count: body.scopes.length },
+        });
+        return true;
+      }
+
       if (path === "/api/admin/service-accounts/sa-sub-playwright/scopes") {
         const body = (await postJson(route)) as ScopeRef;
         requests.push({ method, path, body });
-        if (method === "POST") {
-          scopes.push(body);
-          items = items.map((item) => ({
-            ...item,
-            scope_counts: counts(scopes),
-          }));
-          await fulfillJson(route, { success: true, data: { added: body } });
-          return true;
-        }
         if (method === "DELETE") {
           const index = scopes.findIndex(
             (scope) => scope.type === body.type && scope.ref === body.ref,
@@ -291,10 +300,10 @@ test.describe("mocked service accounts browser regression", () => {
     await manageDialog.getByRole("button", { name: /Add agents/ }).click();
     await page.getByRole("button", { name: "Runbook Agent" }).first().click({ force: true });
     await manageDialog.getByRole("button", { name: "Add", exact: true }).first().click({ force: true });
-    await expect.poll(() => requests.some((request) => request.method === "POST" && request.path.endsWith("/scopes"))).toBe(true);
+    await expect.poll(() => requests.some((request) => request.method === "POST" && request.path.endsWith("/scopes/bulk"))).toBe(true);
     expect(
-      requests.find((request) => request.method === "POST" && request.path.endsWith("/scopes"))?.body,
-    ).toEqual({ type: "agent", ref: "runbook-agent" });
+      requests.find((request) => request.method === "POST" && request.path.endsWith("/scopes/bulk"))?.body,
+    ).toEqual({ scopes: [{ type: "agent", ref: "runbook-agent" }] });
     await expect(manageDialog.getByText("runbook-agent")).toBeVisible();
 
     await manageDialog.getByRole("button", { name: "Remove tool jira/search" }).click();
@@ -409,15 +418,21 @@ test.describe("mocked service accounts browser regression", () => {
         return true;
       }
 
-      if (path === "/api/admin/service-accounts/sa-sub-full-catalog/scopes" && method === "POST") {
-        const body = (await postJson(route)) as ScopeRef;
+      if (
+        path === "/api/admin/service-accounts/sa-sub-full-catalog/scopes/bulk" &&
+        method === "POST"
+      ) {
+        const body = (await postJson(route)) as { scopes: ScopeRef[] };
         requests.push({ method, path, body });
-        if (body.ref === "github/*") {
+        if (body.scopes.some((scope) => scope.ref === "github/*")) {
           await fulfillJson(route, { success: false, error: "Backend rejected github wildcard" }, 403);
           return true;
         }
-        scopes.push(body);
-        await fulfillJson(route, { success: true, data: { added: body } });
+        scopes.push(...body.scopes);
+        await fulfillJson(route, {
+          success: true,
+          data: { added: body.scopes, added_count: body.scopes.length },
+        });
         return true;
       }
 
@@ -456,7 +471,7 @@ test.describe("mocked service accounts browser regression", () => {
     await page.getByRole("button", { name: "jira: search" }).click({ force: true });
     await dialog.getByRole("button", { name: "Add", exact: true }).first().click({ force: true });
     await expect.poll(() => requests.some((request) => request.method === "POST")).toBe(true);
-    expect(requests.at(-1)?.body).toEqual({ type: "tool", ref: "jira/search" });
+    expect(requests.at(-1)?.body).toEqual({ scopes: [{ type: "tool", ref: "jira/search" }] });
     await expect(dialog.getByText("jira/search")).toBeVisible();
 
     await dialog.getByRole("button", { name: /Add tools/ }).click();
@@ -470,7 +485,7 @@ test.describe("mocked service accounts browser regression", () => {
     await expect(scopeAdd).toBeEnabled();
     await scopeAdd.click({ force: true });
     await expect.poll(() => requests.length).toBe(requestCount + 1);
-    expect(requests.at(-1)?.body).toEqual({ type: "tool", ref: "github/*" });
+    expect(requests.at(-1)?.body).toEqual({ scopes: [{ type: "tool", ref: "github/*" }] });
     await expect(dialog.getByText("Backend rejected github wildcard")).toBeVisible();
     await expect(dialog.getByText("github/*")).toHaveCount(0);
   });
@@ -908,11 +923,17 @@ test.describe("mocked service accounts browser regression", () => {
         return true;
       }
 
-      if (path === "/api/admin/service-accounts/sa-unlinked-platform/scopes" && method === "POST") {
-        const body = (await postJson(route)) as ScopeRef;
+      if (
+        path === "/api/admin/service-accounts/sa-unlinked-platform/scopes/bulk" &&
+        method === "POST"
+      ) {
+        const body = (await postJson(route)) as { scopes: ScopeRef[] };
         requests.push({ method, path, search: url.search, body });
-        scopes.push(body);
-        await fulfillJson(route, { success: true, data: { added: body } });
+        scopes.push(...body.scopes);
+        await fulfillJson(route, {
+          success: true,
+          data: { added: body.scopes, added_count: body.scopes.length },
+        });
         return true;
       }
 
@@ -953,7 +974,7 @@ test.describe("mocked service accounts browser regression", () => {
         requests.some(
           (request) =>
             request.method === "POST" &&
-            request.path === "/api/admin/service-accounts/sa-unlinked-platform/scopes",
+            request.path === "/api/admin/service-accounts/sa-unlinked-platform/scopes/bulk",
         ),
       )
       .toBe(true);
@@ -961,9 +982,9 @@ test.describe("mocked service accounts browser regression", () => {
       requests.find(
         (request) =>
           request.method === "POST" &&
-          request.path === "/api/admin/service-accounts/sa-unlinked-platform/scopes",
+          request.path === "/api/admin/service-accounts/sa-unlinked-platform/scopes/bulk",
       )?.body,
-    ).toEqual({ type: "tool", ref: "jira/search" });
+    ).toEqual({ scopes: [{ type: "tool", ref: "jira/search" }] });
     await expect(dialog.getByText("tool/jira/search")).toBeVisible();
   });
 

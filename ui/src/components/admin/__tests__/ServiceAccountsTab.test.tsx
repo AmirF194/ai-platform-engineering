@@ -102,7 +102,8 @@ function mockCommonEndpoints(overrides: {
 } = {}) {
   const grantable = overrides.grantable ?? { success: true, data: GRANTABLE };
   const collectionMembers = overrides.collectionMembers ?? COLLECTION_MEMBERS;
-  const scopePost = overrides.scopePost ?? { success: true, data: { added: {} } };
+  const scopePost =
+    overrides.scopePost ?? { success: true, data: { added: [], added_count: 0 } };
 
   global.fetch = jest.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const href = String(input);
@@ -159,7 +160,7 @@ function mockCommonEndpoints(overrides: {
         json: async () => collectionMembers,
       } as Response);
     }
-    if (href.endsWith("/scopes") && method === "POST") {
+    if (href.endsWith("/scopes/bulk") && method === "POST") {
       return Promise.resolve({
         ok: (scopePost as Record<string, unknown>).success !== false,
         json: async () => scopePost,
@@ -546,7 +547,7 @@ describe("ServiceAccountsTab — ManageServiceAccountDialog knowledge pickers", 
     expect(screen.queryByTestId("scope-datasource-bulk-ds-12")).not.toBeInTheDocument();
   });
 
-  it("shows an 'Adding N of M' progress count immediately on Add click, clearing when done", async () => {
+  it("shows an 'Adding N scopes' progress label immediately on Add click, clearing when done", async () => {
     const user = await openManageDialog();
 
     await user.click(screen.getByRole("button", { name: /add datasources/i }));
@@ -555,18 +556,19 @@ describe("ServiceAccountsTab — ManageServiceAccountDialog knowledge pickers", 
 
     fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
 
-    // Visible the instant Add is clicked — not just partway through the
-    // sequential POST loop, so a large batch never looks hung at the start.
-    expect(screen.getByText(/adding 0 of 1\.\.\./i)).toBeInTheDocument();
+    // Visible the instant Add is clicked, not just once the bulk request
+    // resolves, so even a large batch never looks hung at the start.
+    expect(screen.getByText(/adding 1 scope\.\.\./i)).toBeInTheDocument();
 
     await waitFor(() =>
-      expect(screen.queryByText(/adding \d+ of \d+\.\.\./i)).not.toBeInTheDocument(),
+      expect(screen.queryByText(/adding \d+ scopes?\.\.\./i)).not.toBeInTheDocument(),
     );
+    // ONE bulk call carrying the full scopes array — not one POST per scope.
     expect(global.fetch).toHaveBeenCalledWith(
-      `/api/admin/service-accounts/${SERVICE_ACCOUNTS[0].id}/scopes`,
+      `/api/admin/service-accounts/${SERVICE_ACCOUNTS[0].id}/scopes/bulk`,
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ type: "datasource", ref: "ds-1" }),
+        body: JSON.stringify({ scopes: [{ type: "datasource", ref: "ds-1" }] }),
       }),
     );
   });

@@ -975,14 +975,12 @@ function ManageServiceAccountDialog({
   const [confirmRotate, setConfirmRotate] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<ScopeRef | null>(null);
   const [scopeFilter, setScopeFilter] = useState("");
-  // Adding scopes POSTs one at a time (server-authoritative, stop-on-first-
-  // failure), so a bulk-add-by-collection batch of hundreds can take tens of
-  // seconds. A live "N of M" count makes that wait legible from the very
-  // first click — a bare spinner icon is easy to miss at the exact moment
-  // Add is clicked, and with no other feedback the dialog can look hung.
-  const [addProgress, setAddProgress] = useState<
-    { done: number; total: number } | null
-  >(null);
+  // Adding scopes is one bulk call (server batches the check + writes + a
+  // single snapshot refresh — see .../scopes/bulk/route.ts), but a batch of
+  // hundreds can still take a couple of seconds. A visible "Adding N
+  // scopes..." label makes that wait legible from the very first click — a
+  // bare spinner icon is easy to miss at the exact moment Add is clicked.
+  const [addCount, setAddCount] = useState<number | null>(null);
   // Add-scope selection — ref arrays, mirroring the create dialog's grantable
   // pickers (#54: styled MultiSelect, not native <select>).
   const [addAgents, setAddAgents] = useState<string[]>([]);
@@ -1211,30 +1209,30 @@ function ManageServiceAccountDialog({
     if (selected.length === 0) return;
     setBusy(true);
     setError(null);
-    setAddProgress({ done: 0, total: selected.length });
+    setAddCount(selected.length);
     try {
-      let done = 0;
-      for (const scope of selected) {
-        const res = await fetch(
-          `/api/admin/service-accounts/${encodeURIComponent(saId)}/scopes`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(scope),
-          },
-        );
-        const body = await res.json();
-        if (!res.ok || !body.success) {
-          const message =
-            body.error || `Failed to add ${scope.type} ${scope.ref}`;
-          // Refresh so any scopes that DID get added show, then stop.
-          await refresh();
-          onMutated();
-          setError(message);
-          return;
-        }
-        done += 1;
-        setAddProgress({ done, total: selected.length });
+      // One bulk call, not one POST per scope: the server batches the
+      // held-scope check and the OpenFGA writes, and re-derives the
+      // snapshot ONCE instead of once per scope — the whole point of the
+      // bulk endpoint is avoiding hundreds of full rescans.
+      const res = await fetch(
+        `/api/admin/service-accounts/${encodeURIComponent(saId)}/scopes/bulk`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ scopes: selected }),
+        },
+      );
+      const body = await res.json();
+      if (!res.ok || !body.success) {
+        // Refresh in case the batch's OpenFGA write itself partially landed
+        // before a later failure (e.g. the snapshot refresh throwing) —
+        // the held-scope check and the tuple write are each atomic on
+        // their own, but the two together aren't a single transaction.
+        await refresh();
+        onMutated();
+        setError(body.error || "Failed to add scopes");
+        return;
       }
       setAddAgents([]);
       setAddTools([]);
@@ -1244,7 +1242,7 @@ function ManageServiceAccountDialog({
       onMutated();
     } finally {
       setBusy(false);
-      setAddProgress(null);
+      setAddCount(null);
     }
   }, [
     saId,
@@ -1710,9 +1708,9 @@ function ManageServiceAccountDialog({
                 </p>
               </div>
               <div className="flex items-center justify-end gap-2">
-                {addProgress && (
+                {addCount !== null && (
                   <span className="text-xs text-muted-foreground">
-                    Adding {addProgress.done} of {addProgress.total}...
+                    Adding {addCount} scope{addCount === 1 ? "" : "s"}...
                   </span>
                 )}
                 <Button

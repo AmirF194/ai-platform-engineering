@@ -100,14 +100,13 @@ export function UnlinkedServiceAccountModal({
     null,
   );
   // KEEP IN SYNC with ManageServiceAccountDialog's addScope in
-  // ServiceAccountsTab.tsx — adding scopes POSTs one at a time
-  // (server-authoritative, stop-on-first-failure), so a bulk-add-by-collection
-  // batch of hundreds can take tens of seconds. A live "N of M" count makes
-  // that wait legible from the very first click — a bare spinner icon is
-  // easy to miss at the exact moment Add is clicked.
-  const [addProgress, setAddProgress] = useState<
-    { done: number; total: number } | null
-  >(null);
+  // ServiceAccountsTab.tsx — adding scopes is one bulk call (server batches
+  // the check + writes + a single snapshot refresh — see
+  // .../scopes/bulk/route.ts), but a batch of hundreds can still take a
+  // couple of seconds. A visible "Adding N scopes..." label makes that wait
+  // legible from the very first click — a bare spinner icon is easy to miss
+  // at the exact moment Add is clicked.
+  const [addCount, setAddCount] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -194,29 +193,23 @@ export function UnlinkedServiceAccountModal({
     if (selected.length === 0) return;
     setBusy(true);
     setError(null);
-    setAddProgress({ done: 0, total: selected.length });
+    setAddCount(selected.length);
     try {
-      let done = 0;
-      for (const scope of selected) {
-        const res = await fetch(
-          `/api/admin/service-accounts/${encodeURIComponent(sa.id)}/scopes`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(scope),
-          },
-        );
-        const body = await res.json();
-        if (!res.ok || !body.success) {
-          const message =
-            body.error || `Failed to add ${scope.type} ${scope.ref}`;
-          // Refresh so any scopes that DID get added show, then stop.
-          await refresh();
-          setError(message);
-          return;
-        }
-        done += 1;
-        setAddProgress({ done, total: selected.length });
+      // One bulk call, not one POST per scope — see the matching comment on
+      // ManageServiceAccountDialog.addScope in ServiceAccountsTab.tsx.
+      const res = await fetch(
+        `/api/admin/service-accounts/${encodeURIComponent(sa.id)}/scopes/bulk`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ scopes: selected }),
+        },
+      );
+      const body = await res.json();
+      if (!res.ok || !body.success) {
+        await refresh();
+        setError(body.error || "Failed to add scopes");
+        return;
       }
       setAddAgents([]);
       setAddTools([]);
@@ -225,7 +218,7 @@ export function UnlinkedServiceAccountModal({
       await refresh();
     } finally {
       setBusy(false);
-      setAddProgress(null);
+      setAddCount(null);
     }
   }, [sa, addAgents, addTools, addDatasources, addCollections, refresh]);
 
@@ -586,9 +579,9 @@ export function UnlinkedServiceAccountModal({
                     </div>
 
                     <div className="flex items-center justify-end gap-2">
-                      {addProgress && (
+                      {addCount !== null && (
                         <span className="text-xs text-muted-foreground">
-                          Adding {addProgress.done} of {addProgress.total}...
+                          Adding {addCount} scope{addCount === 1 ? "" : "s"}...
                         </span>
                       )}
                       <Button
