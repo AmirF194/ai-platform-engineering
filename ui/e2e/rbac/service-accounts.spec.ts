@@ -2,7 +2,6 @@
 
 import { expect, test, type Page } from "@playwright/test";
 
-import { chooseSearchablePickerOption } from "./_helpers";
 import {
   fulfillJson,
   installMockedRbacApp,
@@ -934,15 +933,10 @@ test.describe("mocked service accounts browser regression", () => {
     const dialog = page.getByRole("dialog", { name: "Unlinked Access" });
     await expect(dialog).toBeVisible();
 
-    await dialog.getByLabel("Scope type").selectOption("tool");
-    await expect(dialog.getByTestId("unlinked-modal-grantable-empty-note")).toHaveCount(0);
-
-    await chooseSearchablePickerOption(
-      page,
-      dialog.getByLabel("Scope ref"),
-      "jira: search",
-    );
-    await dialog.getByRole("button", { name: "Add" }).click();
+    await dialog.getByRole("button", { name: "Add tools..." }).click();
+    await dialog.getByRole("button", { name: "jira: search" }).click();
+    await page.keyboard.press("Escape");
+    await dialog.getByRole("button", { name: "Add", exact: true }).click();
 
     await expect
       .poll(() =>
@@ -1041,13 +1035,10 @@ test.describe("mocked service accounts browser regression", () => {
     const dialog = page.getByRole("dialog", { name: "Unlinked Access" });
     await expect(dialog).toBeVisible();
 
-    await dialog.getByLabel("Scope type").selectOption("tool");
-    await expect(dialog.getByTestId("unlinked-modal-grantable-empty-note")).toHaveText(
-      /No tools available to grant/i,
-    );
-    await expect(dialog.getByLabel("Scope ref")).toContainText("No more tools available");
-    await expect(dialog.getByLabel("Scope ref")).not.toContainText("jira: all tools");
-    await expect(dialog.getByRole("button", { name: "Add" })).toBeDisabled();
+    await dialog.getByRole("button", { name: "Add tools..." }).click();
+    await expect(dialog.getByText(/No more tools you can grant/i)).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog.getByRole("button", { name: "Add", exact: true })).toBeDisabled();
     await expect
       .poll(() =>
         requests.some(
