@@ -8,25 +8,16 @@ This page is the map for the repo's CI/CD flow: prebuild artifacts, the `canary`
 
 ## The Release Ladder
 
-Every image and Helm chart carries the same tag, so a build's provenance and stability are visible at a glance:
+Every image and Helm chart carries the same tag, so you can tell how stable a build is just by looking at it. RCs and hotfixes both graduate into a final release using the same steps — see [Final Release Flow](#final-release-flow) below.
 
 | Tag | Stage | Created from | Meaning |
 | --- | --- | --- | --- |
-| `canary` | Alpha | every merge to `main` | Floating tag, always the latest main. Overwritten on each merge — never pin to it. |
-| `x.y.z-rc.N` | Beta | every push to `release/x.y.z` | Release candidate. Immutable. |
-| `x.y.z-hotfix.N` | Beta (patch) | every push to `release/x.y.z-hotfix` | Hotfix candidate for an already-released version. Immutable. |
-| `x.y.z` | Stable | `release-manual.yml` | Production release. Also tagged `latest`. Immutable. |
+| `canary` | Alpha | every merge to `main` | Always the newest main build. Gets replaced on every merge — don't rely on it staying the same. |
+| `x.y.z-rc.N` | Beta | every push to `release/x.y.z` | A release candidate. Fixed — never changes once created. |
+| `x.y.z-hotfix.N` | Beta (patch) | every push to `release/x.y.z-hotfix` | A candidate fix for a version that already shipped. Fixed — never changes once created. |
+| `x.y.z` | Stable | `release-manual.yml` | The production release. Also tagged `latest`. Fixed — never changes once created. |
 
-```mermaid
-flowchart LR
-  Main["main"] -->|merge, affected components only| Canary["canary\n(alpha, floating)"]
-  ReleaseBranch["release/x.y.z"] -->|every push, all components| RC["x.y.z-rc.N\n(beta)"]
-  HotfixBranch["release/x.y.z-hotfix"] -->|every push, all components| Hotfix["x.y.z-hotfix.N\n(beta)"]
-  RC -->|release-manual.yml| Final["x.y.z + latest\n(stable)"]
-  Hotfix -->|release-manual.yml| Final
-```
-
-Chart version and image tag always match — there is no separate chart-only version. A chart-only fix rides the next tag like any other change.
+Chart version and image tag always match — there is no separate chart-only version. A chart-only fix ships with the next tag like any other change.
 
 ## Artifact Locations
 
@@ -43,7 +34,7 @@ Chart version and image tag always match — there is no separate chart-only ver
 2. Applies a PR flow label such as `dev`, `0.4.0`, `0.4.0-hotfix`, or `release/0.4.0`.
 3. For a `release/x.y.z -> main` PR specifically, uses `.github/actions/prepare-release/action.yml` to commit the final `x.y.z` version files and changelog onto that PR branch ahead of merge.
 
-Ordinary PRs get no version-file commit — prebuild and canary tags are computed at build time from git tags instead.
+Ordinary PRs get no commit — prebuild and canary tags are worked out fresh at build time instead of being written into the repo.
 
 ## Docker and Helm Image CI
 
@@ -52,7 +43,7 @@ Every image and chart workflow (`ci-*.yml`, `ci-helm.yml` — see the reference 
 - **Push to `main`** — builds `canary`, but only for the component(s) whose own paths actually changed in that push. A docs-only or single-component merge does not rebuild everything.
 - **Push of a tag** (`x.y.z`, `x.y.z-rc.N`, `x.y.z-hotfix.N`) — builds every component fresh, regardless of which paths changed. This is what makes an RC or final release a complete, reproducible artifact set.
 
-Each workflow resolves the tag through `.github/actions/determine-release-tag/action.yml`, which returns `canary` for a main push, the pushed tag for a tag push, or the manual input for `workflow_dispatch`.
+Each workflow figures out its own tag via `.github/actions/determine-release-tag/action.yml`: `canary` for a main push, the pushed tag for a tag push, or whatever you typed in if you triggered the build by hand.
 
 ## Prebuild Artifacts
 
@@ -63,14 +54,6 @@ Prebuild artifacts let you test Docker images or Helm charts from a PR before it
 3. Each `prebuild-*.yml` workflow triggers directly off that PR and publishes only the component(s) whose paths changed, tagged `<latest-stable-tag>-<branch>-<N>` — for example `1.1.0-feat-add-feature-a-3`, where `1.1.0` is the latest stable release and `3` is the commit count on the branch.
 4. Each new commit increments `N` and publishes a new tag.
 5. `prebuild-image-cleanup.yml` deletes every tag for that branch once the PR merges or closes.
-
-```mermaid
-flowchart LR
-  Branch["prebuild/* branch"] -->|each commit| Tag["1.1.0-branch-N"]
-  Tag --> Images["Docker images\n(changed components only)"]
-  Tag --> Chart["Helm chart"]
-  Close["PR merged or closed"] --> Cleanup["prebuild-image-cleanup.yml\ndeletes every version tagged for that branch"]
-```
 
 ## Release Candidate & Hotfix Flow
 
