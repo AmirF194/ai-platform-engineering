@@ -18,15 +18,15 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import logging
 import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+from common import utils
 
-logger = logging.getLogger(__name__)
+logger = utils.get_logger(__name__)
 
 SUBJECT_SALT = os.getenv("AUDIT_SUBJECT_SALT", "caipe-098-audit")
 ALLOW_ROLLUP_FLUSH_SECONDS = float(os.getenv("AUDIT_RAG_ROLLUP_FLUSH_SECONDS", "10"))
@@ -186,6 +186,6 @@ async def stop_allow_rollup_flusher() -> None:
     try:
         await _flush_task
     except asyncio.CancelledError:
-        pass  # expected: we just cancelled this task ourselves
+        logger.info("Allow rollup flusher cancelled")  # expected: we just cancelled it ourselves
     _flush_task = None
     flush_allow_rollups()
