@@ -98,8 +98,7 @@ jobs:
             }
 
             if (pr.head.repo.full_name !== repoFullName) {
-              core.setFailed(`PR #${prNumber} head repo is ${pr.head.repo.full_name}; manual prebuild only supports same-repo PRs.`);
-              return;
+              core.info(`PR #${prNumber} head repo is ${pr.head.repo.full_name} (fork). Proceeding because @${context.actor} has write access and triggered this manually.`);
             }
 
             if (!pr.head.ref.startsWith('prebuild/')) {
