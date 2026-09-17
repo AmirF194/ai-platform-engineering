@@ -48,7 +48,6 @@ _ROLLUP_KEY_FIELDS = (
 _rollup_lock = threading.Lock()
 _rollup_counts: dict[tuple[Any, ...], dict[str, Any]] = {}
 _flush_timer: threading.Timer | None = None
-_flush_started = False
 
 
 def _hash_subject(subject: str) -> str:
@@ -139,10 +138,9 @@ def _flush_and_reschedule() -> None:
 
 def start_allow_rollup_flusher() -> None:
     """Start the periodic background flush. Call once from the server entrypoint."""
-    global _flush_started
-    if _flush_started or FULL_FIDELITY_ALLOWS:
+    if getattr(start_allow_rollup_flusher, "_started", False) or FULL_FIDELITY_ALLOWS:
         return
-    _flush_started = True
+    start_allow_rollup_flusher._started = True
     _schedule_next_flush()
 
 

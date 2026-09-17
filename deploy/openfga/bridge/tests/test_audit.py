@@ -99,6 +99,28 @@ def test_flush_clears_state_so_next_flush_only_reports_new_activity(monkeypatch)
     assert [event["count"] for event in posted] == [1, 1]
 
 
+def test_start_allow_rollup_flusher_is_idempotent(monkeypatch):
+    module = _load_audit_module()
+    calls = []
+    monkeypatch.setattr(module, "_schedule_next_flush", lambda: calls.append(1))
+
+    module.start_allow_rollup_flusher()
+    module.start_allow_rollup_flusher()
+
+    assert calls == [1]
+
+
+def test_start_allow_rollup_flusher_noop_when_full_fidelity(monkeypatch):
+    module = _load_audit_module()
+    monkeypatch.setattr(module, "FULL_FIDELITY_ALLOWS", True)
+    calls = []
+    monkeypatch.setattr(module, "_schedule_next_flush", lambda: calls.append(1))
+
+    module.start_allow_rollup_flusher()
+
+    assert calls == []
+
+
 def test_full_fidelity_env_var_disables_aggregation(monkeypatch):
     module = _load_audit_module()
     monkeypatch.setattr(module, "FULL_FIDELITY_ALLOWS", True)
