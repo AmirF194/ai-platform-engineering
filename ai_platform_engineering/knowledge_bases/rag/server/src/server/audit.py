@@ -186,6 +186,6 @@ async def stop_allow_rollup_flusher() -> None:
     try:
         await _flush_task
     except asyncio.CancelledError:
-        pass
+        pass  # expected: we just cancelled this task ourselves
     _flush_task = None
     flush_allow_rollups()
